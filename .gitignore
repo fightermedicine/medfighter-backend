@@ -41,6 +41,8 @@ share/python-wheels/
 
 # Uploaded files / storage
 storage/uploads/*
+!storage/uploads/pdfs/
+!storage/uploads/pdfs/*.pdf
 !storage/uploads/.gitkeep
 storage/proofs/*
 !storage/proofs/.gitkeep
