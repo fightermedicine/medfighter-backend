@@ -9,6 +9,15 @@ if str(ROOT_DIR) not in sys.path:
 try:
     from app.main import create_app
     app = create_app()
+
+    @app.get("/")
+    def root_status():
+        return {
+            "service": "MedFighter API",
+            "status": "online",
+            "environment": "production"
+        }
+
 except Exception as e:
     from fastapi import FastAPI
     from fastapi.responses import PlainTextResponse
