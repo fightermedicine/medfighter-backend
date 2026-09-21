@@ -14,8 +14,8 @@ else
 fi
 
 # 2. Launch production ASGI server (Uvicorn)
-PORT="${PORT:-8000}"
-WORKERS="${WORKERS:-4}"
+PORT="${PORT:-7860}"
+WORKERS="${WORKERS:-2}"
 
 echo "[2/2] Starting Uvicorn ASGI server on port ${PORT} with ${WORKERS} workers..."
 exec uvicorn app.main:create_app --factory \
@@ -23,5 +23,4 @@ exec uvicorn app.main:create_app --factory \
     --port "${PORT}" \
     --workers "${WORKERS}" \
     --proxy-headers \
-    --forwarded-allow-ips "*" \
-    --no-access-log
+    --forwarded-allow-ips "*"
