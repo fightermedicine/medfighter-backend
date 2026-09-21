@@ -1,0 +1,39 @@
+services:
+  - type: web
+    name: medfighter-backend
+    runtime: python
+    region: frankfurt
+    plan: free
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:create_app --factory --host 0.0.0.0 --port $PORT --workers 2
+    healthCheckPath: /v1/health
+    autoDeploy: true
+    envVars:
+      - key: FIGHTERS_ENVIRONMENT
+        value: production
+      - key: FIGHTERS_DEBUG
+        value: "false"
+      - key: FIGHTERS_LOG_LEVEL
+        value: INFO
+      - key: FIGHTERS_DATABASE_URL
+        sync: false
+      - key: FIGHTERS_SUPABASE_URL
+        sync: false
+      - key: FIGHTERS_SUPABASE_KEY
+        sync: false
+      - key: FIGHTERS_CLOUDFLARE_ACCOUNT_ID
+        sync: false
+      - key: FIGHTERS_CLOUDFLARE_API_TOKEN
+        sync: false
+      - key: FIGHTERS_R2_BUCKET_NAME
+        value: fighters-vault-packages
+      - key: FIGHTERS_R2_ENDPOINT_URL
+        sync: false
+      - key: FIGHTERS_R2_ACCESS_KEY_ID
+        sync: false
+      - key: FIGHTERS_R2_SECRET_ACCESS_KEY
+        sync: false
+      - key: FIGHTERS_GOOGLE_CLIENT_ID
+        sync: false
+      - key: FIGHTERS_GOOGLE_CLIENT_SECRET
+        sync: false

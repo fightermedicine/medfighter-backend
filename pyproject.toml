@@ -1,0 +1,77 @@
+[project]
+name = "fighters-backend"
+version = "0.1.0"
+description = "Fighters — protected medical learning marketplace. FastAPI modular monolith (plan §42)."
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.32",
+    "pydantic-settings>=2.6",
+    "sqlalchemy[asyncio]>=2.0.36",
+    "alembic>=1.14",
+    "asyncpg>=0.30",
+    "structlog>=24.4",
+    "argon2-cffi>=23.1",
+    "pyjwt[crypto]>=2.9",
+    "cryptography>=43.0",
+    "email-validator>=2.0",
+    "httpx>=0.28",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3",
+    "pytest-asyncio>=0.24",
+    "aiosqlite>=0.20",
+    "httpx>=0.28",
+    "ruff>=0.8",
+    "mypy>=1.13",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+allowed-confusables = ["–", "—"] # en/em dashes in docstrings quoting the plan
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "UP",  # pyupgrade
+    "B",   # bugbear
+    "S",   # bandit — server code must not do naive things (subprocess, yaml, eval…)
+    "T20", # no print() in application code
+    "ASYNC",
+    "RUF",
+]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.params.Depends", "fastapi.Header", "fastapi.Query"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "E402"] # asserts + fake secret keys are the point of tests; conftest sets env before imports
+"worker.py" = ["ASYNC110"] # poll loop is the intended §50 pattern
+"app/modules/identity/schemas.py" = ["S105"] # token_type = "Bearer" is an OAuth2 field, not a secret
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["app", "tests"]
+
+[[tool.mypy.overrides]]
+module = "tests.*"
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

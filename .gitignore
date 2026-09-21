@@ -1,0 +1,74 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.venv/
+venv/
+ENV/
+
+# Distribution / packaging
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+*.zip
+
+# Caches
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+
+# Databases & local files
+*.db
+*.sqlite
+*.sqlite3
+*.exe
+*.log
+
+# Uploaded files / storage
+storage/uploads/*
+!storage/uploads/.gitkeep
+storage/proofs/*
+!storage/proofs/.gitkeep
+storage/packages/*
+!storage/packages/.gitkeep
+
+# Developer / maintenance scripts with local credentials
+scripts/
+audit_*.py
+check_*.py
+find_*.py
+inspect_*.py
+measure_*.py
+migrate_*.py
+optimize_*.py
+seed_*.py
+test_*.py
+add_inspector.py
+verify_production.py
+deploy_production.sh
+docker-compose.prod.yml
+
+# Environment secrets
+.env
+.env.*
+!.env.example
+!.env.production.example
+
+# OS
+.DS_Store
+Thumbs.db
