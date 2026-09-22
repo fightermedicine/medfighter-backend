@@ -143,3 +143,36 @@ class AuditLogResponse(BaseModel):
     page: int
     page_size: int
     items: list[AuditEventOut]
+
+
+# ── Memo Access Analytics ───────────────────────────────────────────────────
+
+class MemoStudentAccessOut(BaseModel):
+    user_id: uuid.UUID
+    user_name: str
+    user_email: str
+    user_phone: str | None = None
+    medical_year: int
+    status: str
+    granted_at: datetime
+    expires_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class MemoAccessItemOut(BaseModel):
+    product_id: uuid.UUID
+    product_title: str
+    product_type: str
+    medical_year: int
+    price_egp: float
+    student_count: int
+    students: list[MemoStudentAccessOut]
+
+    model_config = {"from_attributes": True}
+
+
+class MemoAccessReport(BaseModel):
+    total_products: int
+    total_active_entitlements: int
+    items: list[MemoAccessItemOut]

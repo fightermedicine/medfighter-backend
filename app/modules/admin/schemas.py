@@ -181,6 +181,7 @@ class AdminQuestionIn(BaseModel):
     explanation: str = Field("", description="Clinical rationale")
     points: int = Field(1, ge=1)
     options: list[AdminOptionIn] = Field(..., min_length=2)
+    correct_answer: str | int | None = Field(None, description="Optional indicator of correct answer (e.g. 'A', 'B', 0, 1, or text)")
 
 
 class AdminQuizCreateRequest(BaseModel):

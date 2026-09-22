@@ -10,7 +10,7 @@ from fastapi import APIRouter, Request, Response
 from app.common.deps import DbSession
 from app.modules.catalog.schemas import CreateProductRequest, ProductPreviewResponse, ProductResponse
 from app.modules.catalog.service import create_product, get_product, get_product_preview, list_products
-from app.modules.identity.deps import RequireAdmin
+from app.modules.identity.deps import OptionalUser, RequireAdmin
 from app.services.r2_storage import R2StorageService
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
@@ -22,9 +22,14 @@ async def get_products(
     db: DbSession,
     medical_year: int | None = None,
     folder_id: uuid.UUID | None = None,
+    current_user: OptionalUser = None,
 ) -> list[ProductResponse]:
     """Public catalog endpoint to list active products optionally filtered by medical year & folder."""
     response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
+    if current_user:
+        is_admin = any(ur.role_id in ("ADMIN", "SUPER_ADMIN") for ur in current_user.roles)
+        if not is_admin:
+            medical_year = current_user.medical_year
     return await list_products(db, medical_year=medical_year, folder_id=folder_id)
 
 

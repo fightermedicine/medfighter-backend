@@ -123,12 +123,19 @@ async def get_quiz_for_taking(db: AsyncSession, bank_id: uuid.UUID) -> QuizStart
             status_code=404, code="not_found", detail="Question bank not found or inactive"
         )
 
+    import random as _random
+
     questions_out = []
     for q in bank.questions:
         options_out = [
-            OptionPublicOut(id=opt.id, text=opt.text, order_index=opt.order_index)
-            for opt in q.options
+            OptionPublicOut(id=opt.id, text=opt.text, order_index=idx)
+            for idx, opt in enumerate(q.options)
         ]
+        # Randomize options so the correct answer is not systematically option A
+        _random.shuffle(options_out)
+        for new_idx, opt_out in enumerate(options_out):
+            opt_out.order_index = new_idx
+
         questions_out.append(
             QuestionPublicOut(
                 id=q.id,

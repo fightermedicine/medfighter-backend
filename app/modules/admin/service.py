@@ -1184,11 +1184,35 @@ async def create_mcq_quiz(
         await db.flush()
         total_questions += 1
 
+        target_correct_idx = None
+        ca = getattr(q_in, "correct_answer", None)
+        if ca is not None:
+            if isinstance(ca, int) and 0 <= ca < len(q_in.options):
+                target_correct_idx = ca
+            elif isinstance(ca, str):
+                ca_clean = ca.strip()
+                if len(ca_clean) == 1 and ca_clean.upper() in ("A", "B", "C", "D", "E", "F"):
+                    idx = ord(ca_clean.upper()) - ord("A")
+                    if 0 <= idx < len(q_in.options):
+                        target_correct_idx = idx
+                elif ca_clean.isdigit():
+                    idx = int(ca_clean)
+                    if 0 <= idx < len(q_in.options):
+                        target_correct_idx = idx
+                    elif 1 <= idx <= len(q_in.options):
+                        target_correct_idx = idx - 1
+                else:
+                    for i, o in enumerate(q_in.options):
+                        if o.text.strip().lower() == ca_clean.lower():
+                            target_correct_idx = i
+                            break
+
         for opt_idx, opt_in in enumerate(q_in.options):
+            is_corr = (target_correct_idx == opt_idx) if target_correct_idx is not None else opt_in.is_correct
             option = QuestionOption(
                 question_id=question.id,
                 text=opt_in.text,
-                is_correct=opt_in.is_correct,
+                is_correct=is_corr,
                 order_index=opt_idx,
             )
             db.add(option)

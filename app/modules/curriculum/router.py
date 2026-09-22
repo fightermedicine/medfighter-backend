@@ -10,7 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.modules.curriculum.schemas import CurriculumFolderCreate, CurriculumFolderOut, CurriculumFolderUpdate
 from app.modules.curriculum.service import create_folder, delete_folder, list_folders, update_folder
-from app.modules.identity.deps import RequireAdmin
+from app.modules.identity.deps import OptionalUser, RequireAdmin
 
 router = APIRouter(prefix="", tags=["curriculum"])
 
@@ -27,8 +27,13 @@ async def get_curriculum_folders(
     parent_id: uuid.UUID | None = Query(default=None),
     all_descendants: bool = Query(default=False),
     db: AsyncSession = Depends(get_db),
+    current_user: OptionalUser = None,
 ) -> list[CurriculumFolderOut]:
     response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    if current_user:
+        is_admin = any(ur.role_id in ("ADMIN", "SUPER_ADMIN") for ur in current_user.roles)
+        if not is_admin:
+            medical_year = current_user.medical_year
     return await list_folders(
         db, medical_year=medical_year, parent_id=parent_id, include_all_descendants=all_descendants
     )

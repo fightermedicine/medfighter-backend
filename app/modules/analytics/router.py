@@ -25,6 +25,7 @@ from app.modules.identity.deps import RequireAdmin, RequireUser
 from app.modules.analytics.schemas import (
     AuditEventOut,
     AuditLogResponse,
+    MemoAccessReport,
     NonPurchasersReport,
     PdfReadEventRequest,
     PdfReaderReport,
@@ -33,6 +34,7 @@ from app.modules.analytics.schemas import (
     WalletBalancesReport,
 )
 from app.modules.analytics.service import (
+    get_memo_access_report,
     get_user_ledger_history,
     list_audit_events,
     list_non_purchasers,
@@ -148,6 +150,24 @@ async def admin_non_purchasers(
     _admin: RequireAdmin,
 ) -> NonPurchasersReport:
     return await list_non_purchasers(db, product_id)
+
+
+# ── Admin: Memo Access ────────────────────────────────────────────────────────
+
+@router.get("/admin/analytics/memo-access", response_model=MemoAccessReport)
+async def admin_memo_access(
+    db: DbSession,
+    _admin: RequireAdmin,
+    q: str | None = Query(default=None),
+    medical_year: int | None = Query(default=None, ge=1, le=6),
+    product_id: uuid.UUID | None = Query(default=None),
+) -> MemoAccessReport:
+    return await get_memo_access_report(
+        db,
+        query=q,
+        medical_year=medical_year,
+        product_id=product_id,
+    )
 
 
 # ── Admin: Audit log ──────────────────────────────────────────────────────────

@@ -18,6 +18,9 @@ from app.modules.analytics.schemas import (
     AuditEventOut,
     AuditLogResponse,
     LedgerHistoryRow,
+    MemoAccessItemOut,
+    MemoAccessReport,
+    MemoStudentAccessOut,
     NonPurchaserRow,
     NonPurchasersReport,
     PdfReaderReport,
@@ -485,3 +488,89 @@ async def list_audit_events(
     ]
 
     return AuditLogResponse(total=total, page=page, page_size=page_size, items=items)
+
+
+# ── Memo Access Analytics ───────────────────────────────────────────────────
+
+async def get_memo_access_report(
+    db: AsyncSession,
+    *,
+    query: str | None = None,
+    medical_year: int | None = None,
+    product_id: uuid.UUID | None = None,
+) -> MemoAccessReport:
+    """Return analytics on which students have access to each product/memo."""
+    # 1. Query products
+    prod_stmt = select(Product).where(Product.is_active.is_(True))
+    if product_id:
+        prod_stmt = prod_stmt.where(Product.id == product_id)
+    if medical_year:
+        prod_stmt = prod_stmt.where(Product.medical_year == medical_year)
+    if query and query.strip():
+        q_str = f"%{query.strip()}%"
+        prod_stmt = prod_stmt.where(Product.title.ilike(q_str))
+
+    prod_stmt = prod_stmt.order_by(Product.medical_year.asc(), Product.title.asc())
+    products = (await db.scalars(prod_stmt)).all()
+
+    if not products:
+        return MemoAccessReport(total_products=0, total_active_entitlements=0, items=[])
+
+    prod_ids = [p.id for p in products]
+
+    # 2. Query active entitlements joined with User for these products
+    ent_stmt = (
+        select(Entitlement, User)
+        .join(User, Entitlement.user_id == User.id)
+        .where(
+            Entitlement.product_id.in_(prod_ids),
+            Entitlement.status == "ACTIVE",
+            User.is_active.is_(True),
+        )
+        .order_by(Entitlement.granted_at.desc())
+    )
+    ent_rows = (await db.execute(ent_stmt)).all()
+
+    # Map entitlements by product_id
+    from collections import defaultdict
+    students_by_product: dict[uuid.UUID, list[MemoStudentAccessOut]] = defaultdict(list)
+    for ent, usr in ent_rows:
+        students_by_product[ent.product_id].append(
+            MemoStudentAccessOut(
+                user_id=usr.id,
+                user_name=usr.full_name,
+                user_email=usr.email,
+                user_phone=usr.phone,
+                medical_year=usr.medical_year,
+                status=ent.status,
+                granted_at=ent.granted_at,
+                expires_at=ent.expires_at,
+            )
+        )
+
+    items: list[MemoAccessItemOut] = []
+    total_active_entitlements = 0
+    for p in products:
+        p_students = students_by_product.get(p.id, [])
+        student_count = len(p_students)
+        total_active_entitlements += student_count
+        items.append(
+            MemoAccessItemOut(
+                product_id=p.id,
+                product_title=p.title,
+                product_type=p.product_type,
+                medical_year=p.medical_year,
+                price_egp=piastres_to_egp(p.price_piastres),
+                student_count=student_count,
+                students=p_students,
+            )
+        )
+
+    # Sort items: products with the most students first, then by title
+    items.sort(key=lambda x: (x.student_count, x.product_title), reverse=True)
+
+    return MemoAccessReport(
+        total_products=len(items),
+        total_active_entitlements=total_active_entitlements,
+        items=items,
+    )

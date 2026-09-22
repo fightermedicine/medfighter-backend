@@ -108,3 +108,19 @@ RequireAdmin = Annotated[User, Depends(require_roles("ADMIN", "SUPER_ADMIN"))]
 RequireSuperAdmin = Annotated[User, Depends(require_roles("SUPER_ADMIN"))]
 RequireCreator = Annotated[User, Depends(require_roles("CREATOR", "ADMIN", "SUPER_ADMIN"))]
 RequireModerator = Annotated[User, Depends(require_roles("MODERATOR", "ADMIN", "SUPER_ADMIN"))]
+
+
+async def get_optional_user(
+    authorization: Annotated[str | None, Header()] = None,
+    db: AsyncSession = Depends(get_db),
+) -> User | None:
+    """Return authenticated User if valid Bearer token provided, else None."""
+    if not authorization or not authorization.startswith("Bearer "):
+        return None
+    try:
+        return await get_current_user(authorization=authorization, db=db)
+    except Exception:
+        return None
+
+
+OptionalUser = Annotated[User | None, Depends(get_optional_user)]

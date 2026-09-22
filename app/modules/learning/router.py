@@ -7,7 +7,7 @@ import uuid
 from fastapi import APIRouter, File, Form, Query, UploadFile
 
 from app.common.deps import DbSession
-from app.modules.identity.deps import RequireUser
+from app.modules.identity.deps import OptionalUser, RequireUser
 from app.modules.learning.schemas import (
     AnkiImportRequest,
     CardDueResponse,
@@ -54,8 +54,13 @@ async def get_quizzes(
     db: DbSession,
     medical_year: int | None = Query(None, ge=1, le=6),
     folder_id: uuid.UUID | None = Query(None),
+    current_user: OptionalUser = None,
 ) -> list[QuestionBankOut]:
     """List active question banks and quiz banks available for study."""
+    if current_user:
+        is_admin = any(ur.role_id in ("ADMIN", "SUPER_ADMIN") for ur in current_user.roles)
+        if not is_admin:
+            medical_year = current_user.medical_year
     return await list_question_banks(db, medical_year=medical_year, folder_id=folder_id)
 
 
@@ -96,6 +101,9 @@ async def get_decks(
     folder_id: uuid.UUID | None = Query(None),
 ) -> list[DeckResponse]:
     """List available decks and cards due for current user."""
+    is_admin = any(ur.role_id in ("ADMIN", "SUPER_ADMIN") for ur in current_user.roles)
+    if not is_admin:
+        medical_year = current_user.medical_year
     return await list_decks(
         db,
         user_id=current_user.id,
@@ -124,6 +132,9 @@ async def search_learning_cards(
     limit: int = Query(100, ge=1, le=500),
 ) -> CardSearchResponse:
     """Search flashcards across user accessible decks (Anki-style card browser)."""
+    is_admin = any(ur.role_id in ("ADMIN", "SUPER_ADMIN") for ur in current_user.roles)
+    if not is_admin:
+        medical_year = current_user.medical_year
     return await search_cards(
         db=db,
         user_id=current_user.id,
