@@ -37,12 +37,16 @@ def _sanitize_list_preview_data(product_id: uuid.UUID, preview_data: str | None)
     if not preview_data:
         return None
     cleaned = preview_data.strip()
-    if cleaned.startswith("http"):
-        return cleaned
     edge_domain = get_settings().cloudflare_edge_domain or "https://fighters-edge-gateway.fightermedicine.workers.dev"
     edge_domain = edge_domain.rstrip("/")
-    return f"{edge_domain}/v1/catalog/products/{product_id}/thumbnail?v=20260923_hd"
 
+    # If it is already a thumbnail URL for this product, standardize on the fresh cache buster
+    if cleaned.startswith("http"):
+        if f"/catalog/products/{product_id}/thumbnail" in cleaned:
+            return f"{edge_domain}/v1/catalog/products/{product_id}/thumbnail?v=20260923_hd2"
+        return cleaned
+
+    return f"{edge_domain}/v1/catalog/products/{product_id}/thumbnail?v=20260923_hd2"
 
 
 async def get_product_thumbnail_bytes(
@@ -59,6 +63,23 @@ async def get_product_thumbnail_bytes(
         return fallback, "image/png"
 
     raw = product.preview_data.strip()
+
+    # Handle direct remote image URLs (e.g. Supabase storage or external CDN)
+    if raw.startswith("http://") or raw.startswith("https://"):
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                resp = await client.get(raw)
+                if resp.status_code == 200:
+                    ct = resp.headers.get("content-type", "image/webp")
+                    data = resp.content
+                    if len(_THUMBNAIL_CACHE) > 100:
+                        _THUMBNAIL_CACHE.clear()
+                    _THUMBNAIL_CACHE[pid_str] = (data, ct)
+                    return data, ct
+        except Exception:
+            pass
+
     media_type = "image/png"
     if raw.startswith("data:image/"):
         header, _, encoded = raw.partition(",")
