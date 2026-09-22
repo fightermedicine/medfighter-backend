@@ -32,14 +32,14 @@ def get_engine() -> AsyncEngine:
             connect_args["statement_cache_size"] = 0
             connect_args["prepared_statement_cache_size"] = 0
         engine_kwargs: dict = {
-            "pool_pre_ping": True,
+            "pool_pre_ping": False,
             "connect_args": connect_args,
         }
         if "sqlite" not in db_url:
-            engine_kwargs["pool_size"] = 25
-            engine_kwargs["max_overflow"] = 25
-            engine_kwargs["pool_timeout"] = 30
-            engine_kwargs["pool_recycle"] = 300
+            engine_kwargs["pool_size"] = 5
+            engine_kwargs["max_overflow"] = 10
+            engine_kwargs["pool_timeout"] = 15
+            engine_kwargs["pool_recycle"] = 180
 
         _engine = create_async_engine(
             db_url,

@@ -46,6 +46,25 @@ async def get_preview(
     return await get_product_preview(db, product_id)
 
 
+@router.get("/products/{product_id}/thumbnail")
+async def get_thumbnail(
+    product_id: uuid.UUID,
+    db: DbSession,
+) -> Response:
+    """Public endpoint to serve raw binary thumbnail with global edge caching."""
+    from app.modules.catalog.service import get_product_thumbnail_bytes
+    img_bytes, media_type = await get_product_thumbnail_bytes(db, product_id)
+    return Response(
+        content=img_bytes,
+        media_type=media_type,
+        headers={
+            "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800, immutable",
+            "ETag": f'"{product_id}"',
+        },
+    )
+
+
+
 
 @router.post("/products", response_model=ProductResponse, status_code=201)
 async def admin_create_product(
