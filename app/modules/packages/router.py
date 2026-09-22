@@ -134,14 +134,57 @@ async def stream_package_file(
                 select(ContentAsset).where(ContentAsset.id == target_uuid)
             )
 
-        if asset and asset.storage_path and os.path.exists(asset.storage_path):
-            filename = os.path.basename(asset.storage_path)
-            logger.info("Found asset on disk: %s (%d bytes)", asset.storage_path, asset.size_bytes)
-            return FileResponse(
-                path=asset.storage_path,
-                media_type="application/pdf",
-                filename=filename,
+        if asset:
+            # 1a. Check DB-backed binary content in content_asset_files
+            from app.modules.content.models import ContentAssetFile
+            asset_file = await db.scalar(
+                select(ContentAssetFile).where(ContentAssetFile.asset_id == asset.id)
             )
+            if asset_file and asset_file.file_bytes:
+                safe_title = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in (asset.title or clean_id))
+                filename = f"{safe_title}.pdf"
+                logger.info("Streaming asset from DB content_asset_files (%d bytes)", len(asset_file.file_bytes))
+                return Response(
+                    content=asset_file.file_bytes,
+                    media_type="application/pdf",
+                    headers={
+                        "Content-Disposition": f'attachment; filename="{filename}"',
+                        "Content-Length": str(len(asset_file.file_bytes)),
+                        "X-Package-Provider": "database_content_asset",
+                    },
+                )
+
+            # 1b. Check local file on disk
+            if asset.storage_path and os.path.exists(asset.storage_path):
+                filename = os.path.basename(asset.storage_path)
+                logger.info("Found asset on disk: %s (%d bytes)", asset.storage_path, asset.size_bytes)
+                return FileResponse(
+                    path=asset.storage_path,
+                    media_type="application/pdf",
+                    filename=filename,
+                )
+
+            # 1c. Check if storage_path is a public HTTP/HTTPS URL (e.g. Supabase Storage)
+            if asset.storage_path and (asset.storage_path.startswith("http://") or asset.storage_path.startswith("https://")):
+                import urllib.request
+                try:
+                    req = urllib.request.Request(asset.storage_path)
+                    with urllib.request.urlopen(req, timeout=15) as remote_resp:
+                        remote_bytes = remote_resp.read()
+                        safe_title = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in (asset.title or clean_id))
+                        filename = f"{safe_title}.pdf"
+                        return Response(
+                            content=remote_bytes,
+                            media_type="application/pdf",
+                            headers={
+                                "Content-Disposition": f'attachment; filename="{filename}"',
+                                "Content-Length": str(len(remote_bytes)),
+                                "X-Package-Provider": "supabase_storage",
+                            },
+                        )
+                except Exception as rem_err:
+                    logger.warning("Failed streaming from remote storage_path: %s", rem_err)
+
 
     # 2. Check for prepackaged file in storage/packages/
     packaged_path = os.path.join(PACKAGES_DIR, f"{package_id}.fght")

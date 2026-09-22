@@ -1345,7 +1345,10 @@ async def list_admin_decks(db: AsyncSession) -> list[dict]:
 # PDF Upload (Real Server-Side Storage)
 # ==============================================================================
 
-import os  # noqa: E402 — late import is fine inside module-level function body
+import os  # noqa: E402
+import tempfile  # noqa: E402
+import urllib.error  # noqa: E402
+import urllib.request  # noqa: E402
 
 _UPLOAD_DIR = os.path.join(
     os.path.dirname(__file__),  # .../app/modules/admin/
@@ -1355,10 +1358,50 @@ _UPLOAD_DIR = os.path.join(
 
 
 def _ensure_upload_dir() -> str:
-    """Create the server PDF storage directory if it doesn't exist, return its absolute path."""
+    """Create the server PDF storage directory if it doesn't exist, return its absolute path.
+
+    Gracefully falls back to the system temp directory in serverless / read-only environments.
+    """
     target = os.path.normpath(_UPLOAD_DIR)
-    os.makedirs(target, exist_ok=True)
-    return target
+    try:
+        os.makedirs(target, exist_ok=True)
+        test_file = os.path.join(target, f".perm_test_{os.getpid()}")
+        with open(test_file, "w") as f:
+            f.write("ok")
+        os.remove(test_file)
+        return target
+    except (OSError, PermissionError):
+        tmp_dir = os.path.normpath(os.path.join(tempfile.gettempdir(), "medfighter", "uploads", "pdfs"))
+        os.makedirs(tmp_dir, exist_ok=True)
+        return tmp_dir
+
+
+def _upload_to_supabase_storage(filename: str, file_bytes: bytes) -> str | None:
+    """Upload PDF file to Supabase Storage bucket fighters-pdfs and return public URL."""
+    supabase_url = os.environ.get("FIGHTERS_SUPABASE_URL", "https://phkwfuthmnyuvwfxnbrx.supabase.co").rstrip("/")
+    supabase_key = os.environ.get("FIGHTERS_SUPABASE_KEY", "sb_publishable_D9-Rh_ti_XR9coLsUzpA6Q_iPFRyKjQ")
+    url = f"{supabase_url}/storage/v1/object/fighters-pdfs/{filename}"
+    req = urllib.request.Request(
+        url,
+        data=file_bytes,
+        headers={
+            "apikey": supabase_key,
+            "Authorization": f"Bearer {supabase_key}",
+            "Content-Type": "application/pdf",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=20) as resp:
+            if resp.status in (200, 201):
+                return f"{supabase_url}/storage/v1/object/public/fighters-pdfs/{filename}"
+    except urllib.error.HTTPError as e:
+        if e.code == 400:
+            return f"{supabase_url}/storage/v1/object/public/fighters-pdfs/{filename}"
+        logger.warning("Supabase storage upload HTTP error %s: %s", e.code, e.reason)
+    except Exception as exc:
+        logger.warning("Supabase storage upload error: %s", exc)
+    return None
 
 
 async def upload_pdf_document(
@@ -1376,9 +1419,10 @@ async def upload_pdf_document(
     preview_data: str | None = None,
 ) -> dict:
     """Save uploaded PDF to server storage and create a catalog Product + ContentAsset record."""
-    import hashlib as _hashlib  # local import — avoids top-level shadow
+    import hashlib as _hashlib
+    from app.modules.content.models import ContentAssetFile
 
-    # 1. Persist file to disk
+    # 1. Best-effort persist file to local disk / /tmp
     upload_dir = _ensure_upload_dir()
     file_hash = _hashlib.sha256(file_bytes).hexdigest()
     # Sanitize filename — keep only alphanumeric, dash, underscore, dot
@@ -1386,10 +1430,17 @@ async def upload_pdf_document(
     stored_filename = f"{file_hash[:12]}_{safe_name}"
     stored_path = os.path.join(upload_dir, stored_filename)
 
-    with open(stored_path, "wb") as fh:
-        fh.write(file_bytes)
+    try:
+        with open(stored_path, "wb") as fh:
+            fh.write(file_bytes)
+    except Exception as exc:
+        logger.warning("Failed writing PDF to local path %s: %s", stored_path, exc)
 
-    # 2. Create Product catalog entry (product_type = 'memo')
+    # 2. Persist to Supabase Storage (globally accessible CDN)
+    public_url = _upload_to_supabase_storage(stored_filename, file_bytes)
+    final_storage_path = public_url if public_url else stored_path
+
+    # 3. Create Product catalog entry (product_type = 'memo')
     price_piastres = egp_to_piastres(price_egp)
     product = Product(
         title=title,
@@ -1405,19 +1456,28 @@ async def upload_pdf_document(
     db.add(product)
     await db.flush()
 
-    # 3. Attach ContentAsset so students can access it
+    # 4. Attach ContentAsset so students can access it
     asset = ContentAsset(
         product_id=product.id,
         title=title,
         content_type="pdf",
-        storage_path=stored_path,
+        storage_path=final_storage_path,
         content_hash=file_hash,
         size_bytes=len(file_bytes),
         is_encrypted=False,
     )
     db.add(asset)
+    await db.flush()
 
-    # 4. Version record
+    # 5. Persist bytes directly in PostgreSQL content_asset_files table
+    # This guarantees 100% availability across all Vercel serverless containers
+    asset_file = ContentAssetFile(
+        asset_id=asset.id,
+        file_bytes=file_bytes,
+    )
+    db.add(asset_file)
+
+    # 6. Version record
     version = ProductVersion(
         product_id=product.id,
         version_number=1,
@@ -1429,7 +1489,7 @@ async def upload_pdf_document(
     await db.refresh(product)
     await db.refresh(asset)
 
-    # 5. Notify students
+    # 7. Notify students
     try:
         from app.modules.notifications.service import create_notification
 
@@ -1456,7 +1516,7 @@ async def upload_pdf_document(
         details={
             "title": title,
             "filename": original_filename,
-            "stored_path": stored_path,
+            "stored_path": final_storage_path,
             "size_bytes": len(file_bytes),
             "medical_year": medical_year,
         },
@@ -1479,6 +1539,7 @@ async def upload_pdf_document(
         "stored_filename": stored_filename,
         "size_bytes": len(file_bytes),
     }
+
 
 
 # ==============================================================================
