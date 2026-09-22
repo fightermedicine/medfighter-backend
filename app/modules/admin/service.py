@@ -22,6 +22,7 @@ from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.config import get_settings
 from app.core.errors import NotFound, ProblemError
 from app.core.money import egp_to_piastres, format_egp, piastres_to_egp
 from app.modules.admin.models import PlatformSetting

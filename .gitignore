@@ -74,3 +74,5 @@ docker-compose.prod.yml
 # OS
 .DS_Store
 Thumbs.db
+
+.vercel
