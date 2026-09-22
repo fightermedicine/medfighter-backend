@@ -11,8 +11,12 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import uuid
 from datetime import UTC, datetime
+
+logger = logging.getLogger(__name__)
+
 
 from sqlalchemy import delete, func, or_, select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -21,7 +25,13 @@ from sqlalchemy.orm import selectinload
 from app.core.errors import NotFound, ProblemError
 from app.core.money import egp_to_piastres, format_egp, piastres_to_egp
 from app.modules.admin.models import PlatformSetting
-from app.modules.admin.schemas import ContactInfoUpdate, SecuritySettingsUpdate
+from app.modules.admin.schemas import (
+    AdminCourseUpdateRequest,
+    AdminDeckUpdateRequest,
+    AdminQuizUpdateRequest,
+    ContactInfoUpdate,
+    SecuritySettingsUpdate,
+)
 from app.modules.audit.service import record_audit_log
 from app.modules.catalog.models import Bundle, BundleItem, PriceRule, Product, ProductVersion
 from app.modules.content.models import ContentAsset
@@ -920,17 +930,21 @@ async def create_published_course(
     }
 
 
-def _sanitize_list_preview_data(preview_data: str | None) -> str | None:
+def _sanitize_list_preview_data(product_id: uuid.UUID | None, preview_data: str | None) -> str | None:
     """Omit heavy inline Base64 thumbnails from list payloads to prevent massive network overhead.
 
     Preserves URLs and short strings. Large data URIs and raw Base64 (> 512 chars)
-    are omitted (None) in list views; full preview_data is preserved on detail endpoints.
+    are replaced with edge thumbnail URLs so the admin dashboard renders crisp thumbnails without blob overhead.
     """
     if not preview_data:
         return None
     data_str = preview_data.strip()
     if data_str.startswith("http://") or data_str.startswith("https://"):
         return data_str
+    if product_id:
+        edge_domain = get_settings().cloudflare_edge_domain or "https://fighters-edge-gateway.fightermedicine.workers.dev"
+        edge_domain = edge_domain.rstrip("/")
+        return f"{edge_domain}/v1/catalog/products/{product_id}/thumbnail?v=20260923_hd"
     if data_str.startswith("data:image/") or len(data_str) > 512:
         return None
     return data_str
@@ -951,7 +965,7 @@ async def list_admin_courses(db: AsyncSession) -> list[dict]:
             "product_type": c.product_type,
             "medical_year": getattr(c, "medical_year", 1) or 1,
             "folder_id": getattr(c, "folder_id", None),
-            "preview_data": _sanitize_list_preview_data(getattr(c, "preview_data", None)),
+            "preview_data": _sanitize_list_preview_data(c.id, getattr(c, "preview_data", None)),
             "is_active": c.is_active,
             "created_at": c.created_at,
         }

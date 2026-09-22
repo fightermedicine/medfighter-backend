@@ -59,7 +59,7 @@ async def get_thumbnail(
         media_type=media_type,
         headers={
             "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800, immutable",
-            "ETag": f'"{product_id}"',
+            "ETag": f'"{product_id}_{len(img_bytes)}"',
         },
     )
 

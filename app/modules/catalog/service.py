@@ -41,7 +41,8 @@ def _sanitize_list_preview_data(product_id: uuid.UUID, preview_data: str | None)
         return cleaned
     edge_domain = get_settings().cloudflare_edge_domain or "https://fighters-edge-gateway.fightermedicine.workers.dev"
     edge_domain = edge_domain.rstrip("/")
-    return f"{edge_domain}/v1/catalog/products/{product_id}/thumbnail"
+    return f"{edge_domain}/v1/catalog/products/{product_id}/thumbnail?v=20260923_hd"
+
 
 
 async def get_product_thumbnail_bytes(
