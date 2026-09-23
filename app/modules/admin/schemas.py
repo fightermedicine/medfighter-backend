@@ -315,7 +315,7 @@ class AdminTeamMemberOut(BaseModel):
 
 class AdminPromoteRequest(BaseModel):
     identifier: str = Field(..., min_length=2, max_length=255, description="User email, phone, or ID")
-    role: str = Field("ADMIN", description="Target admin role: 'ADMIN' or 'SUPER_ADMIN'")
+    role: str = Field("ADMIN", description="Target role: 'ADMIN', 'SUPER_ADMIN', or 'CREATOR'")
 
 
 class AdminDemoteRequest(BaseModel):

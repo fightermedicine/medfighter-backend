@@ -926,3 +926,78 @@ async def admin_update_security_settings_endpoint(
     return SecuritySettingsOut(**data)
 
 
+# ==============================================================================
+# Creator Governance & Audit Ledger Endpoints
+# ==============================================================================
+
+
+@router.get(
+    "/v1/admin/creators",
+    status_code=status.HTTP_200_OK,
+    summary="Get list of all creators and their activity stats (Admin only)",
+)
+async def admin_get_creators(
+    admin: RequireAdmin,
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    from sqlalchemy import select
+    from app.modules.identity.models import User, UserRole
+
+    q = (
+        select(User)
+        .join(UserRole, UserRole.user_id == User.id)
+        .where(UserRole.role_id == "CREATOR")
+        .distinct()
+    )
+    creators = (await db.scalars(q)).all()
+    results = []
+    for c in creators:
+        results.append({
+            "id": str(c.id),
+            "email": c.email,
+            "full_name": c.full_name,
+            "phone": c.phone,
+            "medical_year": c.medical_year,
+            "is_active": c.is_active,
+            "created_at": c.created_at.isoformat(),
+        })
+    return results
+
+
+@router.get(
+    "/v1/admin/creators/ledger",
+    status_code=status.HTTP_200_OK,
+    summary="Audit trail of all creator top-up transactions (Admin only)",
+)
+async def admin_get_creator_ledger(
+    admin: RequireAdmin,
+    db: AsyncSession = Depends(get_db),
+    limit: int = 100,
+) -> list[dict]:
+    from sqlalchemy import desc, select
+    from app.modules.audit.models import AuditLog
+
+    stmt = (
+        select(AuditLog)
+        .where(AuditLog.action == "wallet.admin_manual_topup")
+        .order_by(desc(AuditLog.created_at))
+        .limit(limit)
+    )
+    logs = (await db.scalars(stmt)).all()
+    items = []
+    for log in logs:
+        details = log.details or {}
+        items.append({
+            "id": str(log.id),
+            "actor_id": str(log.actor_id) if log.actor_id else None,
+            "actor_role": log.actor_role,
+            "transaction_id": details.get("transaction_id", str(log.id)),
+            "target_email": details.get("target_email", ""),
+            "target_user_id": details.get("target_user_id", ""),
+            "amount_egp": float(details.get("amount_egp", 0.0)),
+            "note": str(details.get("note", "")),
+            "created_at": log.created_at.isoformat(),
+        })
+    return items
+
+

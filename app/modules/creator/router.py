@@ -1,0 +1,256 @@
+"""Router for Creator Studio endpoints (§Creator Layer)."""
+
+from __future__ import annotations
+
+import uuid
+from datetime import UTC, datetime
+from typing import Annotated
+
+from fastapi import APIRouter, Depends, Request, status
+from sqlalchemy import desc, func, or_, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.db import get_db
+from app.core.errors import ProblemError
+from app.modules.audit.models import AuditLog
+from app.modules.identity.deps import RequireCreator
+from app.modules.identity.models import User
+from app.modules.creator.schemas import (
+    CreatorDashboardResponse,
+    CreatorStudentLookupRequest,
+    CreatorStudentLookupResponse,
+    CreatorTopupHistoryItem,
+    CreatorTopupRequest,
+    CreatorTopupResponse,
+)
+from app.modules.wallet.service import (
+    admin_manual_user_topup,
+    calculate_wallet_balance,
+    get_or_create_wallet,
+)
+
+router = APIRouter(prefix="/v1/creator", tags=["Creator Studio"])
+
+
+@router.post(
+    "/lookup",
+    response_model=CreatorStudentLookupResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Lookup a student by phone, email, or ID before top-up",
+)
+async def creator_lookup_student(
+    body: CreatorStudentLookupRequest,
+    creator: RequireCreator,
+    db: AsyncSession = Depends(get_db),
+) -> CreatorStudentLookupResponse:
+    clean_id = body.identifier.strip()
+    target_user: User | None = None
+
+    try:
+        u_id = uuid.UUID(clean_id)
+        target_user = await db.get(User, u_id)
+    except ValueError:
+        pass
+
+    if not target_user:
+        q = select(User).where(
+            or_(
+                func.lower(User.email) == clean_id.lower(),
+                User.phone == clean_id,
+            )
+        )
+        target_user = await db.scalar(q)
+
+    if not target_user:
+        raise ProblemError(
+            status_code=404,
+            code="student_not_found",
+            detail=f"لم يتم العثور على طالب برقم/إيميل: '{clean_id}'. تأكد من تسجيل الطالب أولاً.",
+        )
+
+    wallet = await get_or_create_wallet(db, target_user.id)
+    balance_piastres = await calculate_wallet_balance(db, wallet.id)
+    current_balance_egp = balance_piastres / 100.0
+
+    return CreatorStudentLookupResponse(
+        id=target_user.id,
+        full_name=target_user.full_name,
+        email=target_user.email,
+        phone=target_user.phone,
+        medical_year=target_user.medical_year,
+        current_balance_egp=current_balance_egp,
+        is_active=target_user.is_active,
+    )
+
+
+@router.post(
+    "/topup",
+    response_model=CreatorTopupResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Directly credit a student's wallet (e.g. Medzone booklet 55 EGP)",
+)
+async def creator_topup_student(
+    body: CreatorTopupRequest,
+    creator: RequireCreator,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+) -> CreatorTopupResponse:
+    ip = request.client.host if request.client else None
+    ua = request.headers.get("user-agent")
+
+    res = await admin_manual_user_topup(
+        db,
+        admin_id=creator.id,
+        user_identifier=body.identifier,
+        amount_egp=body.amount_egp,
+        note=f"[Creator: {creator.full_name}] {body.note}",
+        ip_address=ip,
+        user_agent=ua,
+    )
+
+    clean_id = body.identifier.strip()
+    target_user: User | None = None
+    try:
+        u_id = uuid.UUID(clean_id)
+        target_user = await db.get(User, u_id)
+    except ValueError:
+        pass
+    if not target_user:
+        q = select(User).where(
+            or_(
+                func.lower(User.email) == clean_id.lower(),
+                User.phone == clean_id,
+            )
+        )
+        target_user = await db.scalar(q)
+
+    student_name = target_user.full_name if target_user else "يا دكتور"
+    student_phone = target_user.phone if target_user else None
+    student_email = target_user.email if target_user else clean_id
+    student_id = target_user.id if target_user else creator.id
+
+    wa_msg = (
+        f"أهلاً دكتور {student_name} 🩺\n"
+        f"تم شحن محفظتك بـ {body.amount_egp:.0f} جنيه بنجاح! 🎉\n"
+        f"رصيدك الحالي: {res.new_balance_egp:.0f} ج.\n"
+        f"تقدر تفتح تطبيق MedFighter الآن وتفتح مذكرة Medzone Ortho مباشرة بدون أي خطوات إضافية ✨"
+    )
+
+    return CreatorTopupResponse(
+        success=True,
+        student_id=student_id,
+        student_name=student_name,
+        student_email=student_email,
+        student_phone=student_phone,
+        amount_egp=body.amount_egp,
+        new_balance_egp=res.new_balance_egp,
+        transaction_id=res.transaction_id,
+        timestamp=datetime.now(UTC).isoformat(),
+        whatsapp_message=wa_msg,
+    )
+
+
+@router.get(
+    "/topup-history",
+    response_model=list[CreatorTopupHistoryItem],
+    status_code=status.HTTP_200_OK,
+    summary="Get recent top-up transactions initiated by this creator",
+)
+async def creator_topup_history(
+    creator: RequireCreator,
+    db: AsyncSession = Depends(get_db),
+    limit: int = 50,
+) -> list[CreatorTopupHistoryItem]:
+    stmt = (
+        select(AuditLog)
+        .where(
+            AuditLog.actor_id == creator.id,
+            AuditLog.action == "wallet.admin_manual_topup",
+        )
+        .order_by(desc(AuditLog.created_at))
+        .limit(limit)
+    )
+    logs = (await db.scalars(stmt)).all()
+
+    items: list[CreatorTopupHistoryItem] = []
+    for log in logs:
+        details = log.details or {}
+        tx_id = details.get("transaction_id", str(log.id))
+        target_email = details.get("target_email", "Student")
+        amount = float(details.get("amount_egp", 0.0))
+        note = str(details.get("note", ""))
+
+        items.append(
+            CreatorTopupHistoryItem(
+                id=str(log.id),
+                transaction_id=tx_id,
+                student_name=target_email.split("@")[0],
+                student_identifier=target_email,
+                amount_egp=amount,
+                note=note,
+                created_at=log.created_at.isoformat(),
+            )
+        )
+    return items
+
+
+@router.get(
+    "/dashboard",
+    response_model=CreatorDashboardResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Get Creator Studio dashboard metrics",
+)
+async def creator_dashboard(
+    creator: RequireCreator,
+    db: AsyncSession = Depends(get_db),
+) -> CreatorDashboardResponse:
+    stmt = (
+        select(AuditLog)
+        .where(
+            AuditLog.actor_id == creator.id,
+            AuditLog.action == "wallet.admin_manual_topup",
+        )
+        .order_by(desc(AuditLog.created_at))
+    )
+    logs = (await db.scalars(stmt)).all()
+
+    total_amount = 0.0
+    students_set: set[str] = set()
+    recent_items: list[CreatorTopupHistoryItem] = []
+
+    for log in logs:
+        details = log.details or {}
+        tx_id = details.get("transaction_id", str(log.id))
+        target_email = details.get("target_email", "Student")
+        target_id = details.get("target_user_id", "")
+        if target_id:
+            students_set.add(target_id)
+        elif target_email:
+            students_set.add(target_email)
+
+        amount = float(details.get("amount_egp", 0.0))
+        total_amount += amount
+        note = str(details.get("note", ""))
+
+        if len(recent_items) < 15:
+            recent_items.append(
+                CreatorTopupHistoryItem(
+                    id=str(log.id),
+                    transaction_id=tx_id,
+                    student_name=target_email.split("@")[0],
+                    student_identifier=target_email,
+                    amount_egp=amount,
+                    note=note,
+                    created_at=log.created_at.isoformat(),
+                )
+            )
+
+    return CreatorDashboardResponse(
+        creator_id=creator.id,
+        creator_name=creator.full_name,
+        creator_email=creator.email,
+        total_students_credited=len(students_set),
+        total_amount_credited_egp=total_amount,
+        medzone_booklet_price=55.0,
+        recent_topups=recent_items,
+    )

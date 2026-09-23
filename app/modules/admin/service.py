@@ -1882,11 +1882,11 @@ async def promote_user_to_admin(
 ) -> dict:
     """Promote an existing student to Admin or Super Admin, or change an existing admin's tier."""
     chosen_role = (target_role or role or "ADMIN").strip().upper()
-    if chosen_role not in ["ADMIN", "SUPER_ADMIN"]:
+    if chosen_role not in ["ADMIN", "SUPER_ADMIN", "CREATOR"]:
         raise ProblemError(
             status_code=400,
             code="invalid_role",
-            detail=f"Role must be either 'ADMIN' or 'SUPER_ADMIN', got '{chosen_role}'.",
+            detail=f"Role must be 'ADMIN', 'SUPER_ADMIN', or 'CREATOR', got '{chosen_role}'.",
         )
 
     clean_id = identifier.strip()
@@ -1921,6 +1921,7 @@ async def promote_user_to_admin(
     # Ensure roles exist in roles table
     for r_id, desc in [
         ("USER", "Learner / Student"),
+        ("CREATOR", "Content Creator / Instructor"),
         ("ADMIN", "Platform Admin / Instructor"),
         ("SUPER_ADMIN", "Super Administrator / Chief Creator"),
     ]:
@@ -1949,6 +1950,9 @@ async def promote_user_to_admin(
         for ur in existing_roles:
             if ur.role_id == "SUPER_ADMIN":
                 await db.delete(ur)
+    elif chosen_role == "CREATOR":
+        if "CREATOR" not in existing_role_ids:
+            db.add(UserRole(user_id=user.id, role_id="CREATOR", assigned_at=now))
 
     # Record authoritative audit log
     await record_audit_log(

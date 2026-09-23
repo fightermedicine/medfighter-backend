@@ -37,6 +37,7 @@ from app.modules.vouchers.router import router as vouchers_router
 from app.modules.wallet.router import router as wallet_router
 from app.modules.analytics.router import router as analytics_router
 from app.modules.telegram.router import router as telegram_router
+from app.modules.creator.router import router as creator_router
 
 logger = get_logger("app")
 
@@ -192,6 +193,7 @@ def create_app() -> FastAPI:
     app.include_router(payments_router, prefix="/v1")
     app.include_router(analytics_router, prefix="/v1")
     app.include_router(telegram_router, prefix="/v1")
+    app.include_router(creator_router)
 
     _register_error_handlers(app)
     return app
