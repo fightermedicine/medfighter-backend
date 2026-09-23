@@ -29,13 +29,13 @@ class CreatorTopupRequest(BaseModel):
 
 class CreatorTopupResponse(BaseModel):
     success: bool = True
-    student_id: uuid.UUID
+    student_id: uuid.UUID | str
     student_name: str
     student_email: str
     student_phone: str | None = None
     amount_egp: float
     new_balance_egp: float
-    transaction_id: str
+    transaction_id: str | uuid.UUID
     timestamp: str
     whatsapp_message: str
 

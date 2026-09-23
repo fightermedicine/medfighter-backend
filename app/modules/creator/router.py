@@ -141,13 +141,13 @@ async def creator_topup_student(
 
     return CreatorTopupResponse(
         success=True,
-        student_id=student_id,
+        student_id=str(student_id),
         student_name=student_name,
         student_email=student_email,
         student_phone=student_phone,
         amount_egp=body.amount_egp,
         new_balance_egp=res.new_balance_egp,
-        transaction_id=res.transaction_id,
+        transaction_id=str(res.transaction_id),
         timestamp=datetime.now(UTC).isoformat(),
         whatsapp_message=wa_msg,
     )
