@@ -270,8 +270,10 @@ class AdminDeckOut(BaseModel):
     category: str
     medical_year: int = 1
     folder_id: uuid.UUID | None = None
-    cards_count: int
-    created_at: datetime
+    cards_count: int = 0
+    total_cards: int | None = None
+    is_active: bool = True
+    created_at: datetime | None = None
 
 
 class AdminPdfUploadOut(BaseModel):

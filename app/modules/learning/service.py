@@ -671,13 +671,16 @@ async def import_anki_file(
     db.add(deck)
 
     for item in cards_data:
+        tags_val = item.get("tags")
+        if tags_val and isinstance(tags_val, str) and len(tags_val) > 250:
+            tags_val = tags_val[:250]
         card = Card(
             id=uuid.uuid4(),
             deck_id=deck_id,
             front=item["front"],
             back=item["back"],
             hint=item.get("hint"),
-            tags=item.get("tags"),
+            tags=tags_val,
         )
         db.add(card)
 

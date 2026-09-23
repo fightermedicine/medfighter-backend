@@ -639,6 +639,7 @@ async def admin_import_deck_file(
         total_cards=deck_resp.total_cards,
         is_active=True,
         cards_count=deck_resp.total_cards,
+        created_at=deck_resp.created_at,
     )
 
 
