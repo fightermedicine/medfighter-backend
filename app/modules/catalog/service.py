@@ -10,7 +10,7 @@ import uuid
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import defer, selectinload
 
 from app.core.config import get_settings
 from app.core.errors import NotFound
@@ -101,7 +101,9 @@ async def get_product_thumbnail_bytes(
         return fallback, "image/png"
 
 
-def _to_product_response(p: Product, is_list: bool = False) -> ProductResponse:
+def _to_product_response(
+    p: Product, is_list: bool = False, has_preview: bool | None = None
+) -> ProductResponse:
     price_rules = [
         PriceRuleOut(min_quantity=r.min_quantity, discount_percent=r.discount_percent)
         for r in getattr(p, "price_rules", [])
@@ -116,8 +118,15 @@ def _to_product_response(p: Product, is_list: bool = False) -> ProductResponse:
                 for bi in getattr(p.bundle, "items", [])
             ],
         )
-    raw_preview = getattr(p, "preview_data", None)
-    preview = _sanitize_list_preview_data(p.id, raw_preview) if is_list else raw_preview
+    if is_list:
+        if has_preview:
+            edge_domain = (get_settings().cloudflare_edge_domain or "https://fighters-edge-gateway.fightermedicine.workers.dev").rstrip("/")
+            preview = f"{edge_domain}/v1/catalog/products/{p.id}/thumbnail?v=20260923_hd2"
+        else:
+            preview = None
+    else:
+        preview = getattr(p, "preview_data", None)
+
     return ProductResponse(
         id=p.id,
         title=p.title,
@@ -199,8 +208,9 @@ async def list_active_products(
 ) -> list[ProductResponse]:
     """List all active published products with price rules, bundles, and year filtering."""
     query = (
-        select(Product)
+        select(Product, Product.preview_data.isnot(None).label("has_preview"))
         .options(
+            defer(Product.preview_data),
             selectinload(Product.price_rules),
             selectinload(Product.bundle).selectinload(Bundle.items),
         )
@@ -213,8 +223,11 @@ async def list_active_products(
         query = query.where(Product.folder_id == folder_id)
 
     query = query.order_by(Product.created_at.desc())
-    products = (await db.scalars(query)).all()
-    return [_to_product_response(p, is_list=True) for p in products]
+    results = (await db.execute(query)).all()
+    return [
+        _to_product_response(row[0], is_list=True, has_preview=bool(row[1]))
+        for row in results
+    ]
 
 
 async def get_product_by_id(db: AsyncSession, product_id: uuid.UUID) -> Product:

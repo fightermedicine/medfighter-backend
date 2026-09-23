@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.errors import Conflict, NotFound, ProblemError
@@ -95,32 +95,26 @@ async def calculate_wallet_balance(
     db: AsyncSession,
     account_id: uuid.UUID,
 ) -> int:
-    """Derive authoritative balance directly from posted ledger entries (§8)."""
-    # Sum credits
-    credit_query = (
-        select(func.coalesce(func.sum(LedgerEntry.amount_piastres), 0))
+    """Derive authoritative balance directly from posted ledger entries in a single optimized query (§8)."""
+    query = (
+        select(
+            func.coalesce(
+                func.sum(
+                    case(
+                        (LedgerEntry.direction == "CREDIT", LedgerEntry.amount_piastres),
+                        else_=-LedgerEntry.amount_piastres,
+                    )
+                ),
+                0,
+            )
+        )
         .join(LedgerTransaction)
         .where(
             LedgerEntry.account_id == account_id,
-            LedgerEntry.direction == "CREDIT",
             LedgerTransaction.status == "POSTED",
         )
     )
-    total_credits = await db.scalar(credit_query) or 0
-
-    # Sum debits
-    debit_query = (
-        select(func.coalesce(func.sum(LedgerEntry.amount_piastres), 0))
-        .join(LedgerTransaction)
-        .where(
-            LedgerEntry.account_id == account_id,
-            LedgerEntry.direction == "DEBIT",
-            LedgerTransaction.status == "POSTED",
-        )
-    )
-    total_debits = await db.scalar(debit_query) or 0
-
-    return int(total_credits - total_debits)
+    return int(await db.scalar(query) or 0)
 
 
 async def get_user_balance(

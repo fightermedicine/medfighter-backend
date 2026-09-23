@@ -62,7 +62,7 @@ class ProblemError(Exception):
         extras: dict[str, Any] | None = None,
     ) -> None:
         if code not in KNOWN_CODES:
-            KNOWN_CODES.add(code)
+            raise ValueError(f"unknown problem code: {code}")
         self.status_code = status_code
         self.code = code
         self.detail = detail

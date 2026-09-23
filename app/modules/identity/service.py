@@ -36,6 +36,8 @@ from app.modules.identity.security import (
     verify_password,
 )
 
+logger = get_logger(__name__)
+
 
 class EmailAlreadyExistsError(ProblemError):
     def __init__(self, email: str) -> None:

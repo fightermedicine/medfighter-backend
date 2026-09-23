@@ -21,6 +21,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     String,
     Text,
@@ -41,7 +42,7 @@ class QuestionBank(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     medical_year: Mapped[int] = mapped_column(Integer, default=1, nullable=False, index=True)
     folder_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("curriculum_folders.id", ondelete="SET NULL"), nullable=True
+        Uuid, ForeignKey("curriculum_folders.id", ondelete="SET NULL"), nullable=True, index=True
     )
     title: Mapped[str] = mapped_column(String(255), nullable=False)
     description: Mapped[str] = mapped_column(Text, nullable=False, default="")
@@ -153,7 +154,7 @@ class Deck(Base):
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     medical_year: Mapped[int] = mapped_column(Integer, default=1, nullable=False, index=True)
     folder_id: Mapped[uuid.UUID | None] = mapped_column(
-        Uuid, ForeignKey("curriculum_folders.id", ondelete="SET NULL"), nullable=True
+        Uuid, ForeignKey("curriculum_folders.id", ondelete="SET NULL"), nullable=True, index=True
     )
     user_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
@@ -194,6 +195,10 @@ class Card(Base):
 
 class CardReview(Base):
     __tablename__ = "card_reviews"
+    __table_args__ = (
+        Index("ix_card_reviews_user_due", "user_id", "due_date"),
+        Index("ix_card_reviews_card_reviewed", "card_id", "reviewed_at"),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid, primary_key=True, default=uuid.uuid4)
     user_id: Mapped[uuid.UUID] = mapped_column(

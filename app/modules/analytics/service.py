@@ -385,28 +385,36 @@ async def list_non_purchasers(
     product_id: uuid.UUID,
 ) -> NonPurchasersReport:
     """Users who have no ACTIVE entitlement for a given product."""
-    product = await db.scalar(select(Product).where(Product.id == product_id))
+    product = await db.scalar(
+        select(Product).options(defer(Product.preview_data)).where(Product.id == product_id)
+    )
     if not product:
         from app.core.errors import NotFound
         raise NotFound(f"Product {product_id}")
 
-    # All active users
-    all_users = (await db.scalars(select(User).where(User.is_active.is_(True)))).all()
-    total_users = len(all_users)
+    total_users = (
+        await db.scalar(
+            select(func.count(User.id)).where(User.is_active.is_(True))
+        )
+    ) or 0
 
-    # Users who already have an active entitlement
-    entitled_ids = set(
-        (
-            await db.scalars(
-                select(Entitlement.user_id).where(
-                    Entitlement.product_id == product_id,
-                    Entitlement.status == "ACTIVE",
-                )
-            )
-        ).all()
+    # Query active users without active entitlement directly in PostgreSQL
+    non_purchaser_stmt = (
+        select(User)
+        .outerjoin(
+            Entitlement,
+            (Entitlement.user_id == User.id)
+            & (Entitlement.product_id == product_id)
+            & (Entitlement.status == "ACTIVE"),
+        )
+        .where(
+            User.is_active.is_(True),
+            Entitlement.id.is_(None),
+        )
+        .order_by(User.created_at.desc())
     )
+    non_purchasers = (await db.scalars(non_purchaser_stmt)).all()
 
-    non_purchasers = [u for u in all_users if u.id not in entitled_ids]
     items = [
         NonPurchaserRow(
             user_id=u.id,
@@ -415,7 +423,7 @@ async def list_non_purchasers(
             medical_year=u.medical_year,
             created_at=u.created_at,
         )
-        for u in sorted(non_purchasers, key=lambda x: x.created_at, reverse=True)
+        for u in non_purchasers
     ]
 
     return NonPurchasersReport(
@@ -500,8 +508,14 @@ async def get_memo_access_report(
     product_id: uuid.UUID | None = None,
 ) -> MemoAccessReport:
     """Return analytics on which students have access to each product/memo."""
-    # 1. Query products
-    prod_stmt = select(Product).where(Product.is_active.is_(True))
+    # 1. Query products (select only needed columns to avoid 5-query ORM relation explosion and huge base64 transfers)
+    prod_stmt = select(
+        Product.id,
+        Product.title,
+        Product.product_type,
+        Product.medical_year,
+        Product.price_piastres,
+    ).where(Product.is_active.is_(True))
     if product_id:
         prod_stmt = prod_stmt.where(Product.id == product_id)
     if medical_year:
@@ -511,7 +525,7 @@ async def get_memo_access_report(
         prod_stmt = prod_stmt.where(Product.title.ilike(q_str))
 
     prod_stmt = prod_stmt.order_by(Product.medical_year.asc(), Product.title.asc())
-    products = (await db.scalars(prod_stmt)).all()
+    products = (await db.execute(prod_stmt)).all()
 
     if not products:
         return MemoAccessReport(total_products=0, total_active_entitlements=0, items=[])

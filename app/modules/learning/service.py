@@ -396,55 +396,66 @@ async def get_due_cards_for_deck(
     user_id: uuid.UUID,
     limit: int = 50,
 ) -> list[CardDueResponse]:
-    """Retrieve cards that are due for review for the user."""
-    deck_res = await db.execute(select(Deck).where(Deck.id == deck_id))
+    """Retrieve cards that are due for review for the user in a single bounded SQL query."""
+    deck_res = await db.execute(select(Deck.id).where(Deck.id == deck_id))
     if not deck_res.scalar_one_or_none():
         raise ProblemError(status_code=404, code="not_found", detail="Deck not found")
 
-    cards_res = await db.execute(
-        select(Card).where(Card.deck_id == deck_id).options(selectinload(Card.reviews))
-    )
-    cards = cards_res.scalars().all()
     now = _utc_now()
+    latest_rev_subq = (
+        select(
+            CardReview.card_id,
+            CardReview.due_date,
+            CardReview.interval_days,
+            CardReview.repetitions,
+            CardReview.ease_factor,
+            func.row_number()
+            .over(
+                partition_by=CardReview.card_id,
+                order_by=CardReview.reviewed_at.desc(),
+            )
+            .label("rn"),
+        )
+        .where(CardReview.user_id == user_id)
+        .subquery()
+    )
+
+    query = (
+        select(
+            Card,
+            latest_rev_subq.c.due_date,
+            latest_rev_subq.c.interval_days,
+            latest_rev_subq.c.repetitions,
+            latest_rev_subq.c.ease_factor,
+        )
+        .outerjoin(
+            latest_rev_subq,
+            (latest_rev_subq.c.card_id == Card.id) & (latest_rev_subq.c.rn == 1),
+        )
+        .where(
+            Card.deck_id == deck_id,
+            (latest_rev_subq.c.card_id.is_(None)) | (latest_rev_subq.c.due_date <= now),
+        )
+        .limit(limit)
+    )
+    rows = (await db.execute(query)).all()
 
     due_list: list[CardDueResponse] = []
-    for card in cards:
-        user_reviews = [r for r in card.reviews if r.user_id == user_id]
-        if not user_reviews:
-            # Brand new card
-            due_list.append(
-                CardDueResponse(
-                    id=card.id,
-                    deck_id=card.deck_id,
-                    front=card.front,
-                    back=card.back,
-                    hint=card.hint,
-                    tags=card.tags,
-                    interval_days=0,
-                    repetitions=0,
-                    ease_factor=2.5,
-                    due_date=None,
-                )
+    for card, due_date, interval_days, reps, ease in rows:
+        due_list.append(
+            CardDueResponse(
+                id=card.id,
+                deck_id=card.deck_id,
+                front=card.front,
+                back=card.back,
+                hint=card.hint,
+                tags=card.tags,
+                interval_days=interval_days if due_date is not None else 0,
+                repetitions=reps if due_date is not None else 0,
+                ease_factor=ease if due_date is not None else 2.5,
+                due_date=due_date,
             )
-        else:
-            latest = max(user_reviews, key=lambda r: r.reviewed_at)
-            if _to_utc(latest.due_date) <= now:
-                due_list.append(
-                    CardDueResponse(
-                        id=card.id,
-                        deck_id=card.deck_id,
-                        front=card.front,
-                        back=card.back,
-                        hint=card.hint,
-                        tags=card.tags,
-                        interval_days=latest.interval_days,
-                        repetitions=latest.repetitions,
-                        ease_factor=latest.ease_factor,
-                        due_date=latest.due_date,
-                    )
-                )
-        if len(due_list) >= limit:
-            break
+        )
 
     return due_list
 

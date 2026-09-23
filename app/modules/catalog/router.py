@@ -54,17 +54,31 @@ async def get_preview(
 @router.get("/products/{product_id}/thumbnail")
 async def get_thumbnail(
     product_id: uuid.UUID,
+    request: Request,
     db: DbSession,
 ) -> Response:
-    """Public endpoint to serve raw binary thumbnail with global edge caching."""
+    """Public endpoint to serve raw binary thumbnail with global edge caching and conditional 304 support."""
     from app.modules.catalog.service import get_product_thumbnail_bytes
     img_bytes, media_type = await get_product_thumbnail_bytes(db, product_id)
+    etag = f'"{product_id}_{len(img_bytes)}"'
+    cache_control = "public, max-age=86400, stale-while-revalidate=604800, immutable"
+
+    client_etag = request.headers.get("if-none-match")
+    if client_etag and client_etag.strip() == etag:
+        return Response(
+            status_code=304,
+            headers={
+                "Cache-Control": cache_control,
+                "ETag": etag,
+            },
+        )
+
     return Response(
         content=img_bytes,
         media_type=media_type,
         headers={
-            "Cache-Control": "public, max-age=86400, stale-while-revalidate=604800, immutable",
-            "ETag": f'"{product_id}_{len(img_bytes)}"',
+            "Cache-Control": cache_control,
+            "ETag": etag,
         },
     )
 

@@ -12,7 +12,7 @@ import uuid
 from typing import Union
 
 from fastapi import APIRouter, Response
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, RedirectResponse, Response
 from sqlalchemy import select
 
 from app.common.deps import DbSession
@@ -166,24 +166,8 @@ async def stream_package_file(
 
             # 1c. Check if storage_path is a public HTTP/HTTPS URL (e.g. Supabase Storage)
             if asset.storage_path and (asset.storage_path.startswith("http://") or asset.storage_path.startswith("https://")):
-                import urllib.request
-                try:
-                    req = urllib.request.Request(asset.storage_path)
-                    with urllib.request.urlopen(req, timeout=15) as remote_resp:
-                        remote_bytes = remote_resp.read()
-                        safe_title = "".join(c if c.isalnum() or c in (" ", "-", "_") else "_" for c in (asset.title or clean_id))
-                        filename = f"{safe_title}.pdf"
-                        return Response(
-                            content=remote_bytes,
-                            media_type="application/pdf",
-                            headers={
-                                "Content-Disposition": f'attachment; filename="{filename}"',
-                                "Content-Length": str(len(remote_bytes)),
-                                "X-Package-Provider": "supabase_storage",
-                            },
-                        )
-                except Exception as rem_err:
-                    logger.warning("Failed streaming from remote storage_path: %s", rem_err)
+                logger.info("Redirecting client directly to remote storage_path: %s", asset.storage_path)
+                return RedirectResponse(url=asset.storage_path, status_code=307)
 
 
     # 2. Check for prepackaged file in storage/packages/
