@@ -254,3 +254,87 @@ async def creator_dashboard(
         medzone_booklet_price=55.0,
         recent_topups=recent_items,
     )
+
+
+@router.get(
+    "/students",
+    status_code=status.HTTP_200_OK,
+    summary="Get full roster of students who purchased or were credited by this creator",
+)
+async def creator_get_students(
+    creator: RequireCreator,
+    db: AsyncSession = Depends(get_db),
+    limit: int = 150,
+) -> list[dict]:
+    stmt = (
+        select(AuditLog)
+        .where(
+            AuditLog.actor_id == creator.id,
+            AuditLog.action == "wallet.admin_manual_topup",
+        )
+        .order_by(desc(AuditLog.created_at))
+        .limit(limit)
+    )
+    logs = (await db.scalars(stmt)).all()
+
+    student_map: dict[str, dict] = {}
+    for log in logs:
+        details = log.details or {}
+        email = details.get("target_email") or details.get("target_user_id") or "Unknown"
+        amount = float(details.get("amount_egp", 0.0))
+        note = details.get("note", "Medzone Booklet")
+
+        if email not in student_map:
+            student_map[email] = {
+                "identifier": email,
+                "email": email,
+                "full_name": email.split("@")[0] if "@" in email else "Student",
+                "phone": "",
+                "medical_year": 4,
+                "total_credited_egp": amount,
+                "latest_booklet": note,
+                "last_active": log.created_at.strftime("%Y-%m-%d %H:%M"),
+                "transactions_count": 1,
+            }
+        else:
+            student_map[email]["total_credited_egp"] += amount
+            student_map[email]["transactions_count"] += 1
+
+    # Enrich with actual user full names and phones if exists
+    if student_map:
+        emails = list(student_map.keys())
+        users_stmt = select(User).where(or_(User.email.in_(emails), User.phone.in_(emails)))
+        users = (await db.scalars(users_stmt)).all()
+        for u in users:
+            key = u.email if u.email in student_map else (u.phone if u.phone in student_map else None)
+            if key and key in student_map:
+                student_map[key]["full_name"] = u.full_name
+                student_map[key]["phone"] = u.phone or ""
+                student_map[key]["medical_year"] = u.medical_year
+
+    return list(student_map.values())
+
+
+@router.get(
+    "/booklets",
+    status_code=status.HTTP_200_OK,
+    summary="Get list of booklets published by or attributed to this creator",
+)
+async def creator_get_booklets(
+    creator: RequireCreator,
+    db: AsyncSession = Depends(get_db),
+) -> list[dict]:
+    # Default active Medzone flagship booklet + any courses
+    return [
+        {
+            "id": "medzone-ortho-2026",
+            "title": "مذكرة جراحة العظام (Medzone Ortho) 🦴",
+            "author": creator.full_name,
+            "medical_year": 4,
+            "price_egp": 55.0,
+            "status": "ACTIVE",
+            "format": "Encrypted PDF (DRM Protected)",
+            "description": "المذكرة الرسمية المعتمدة لدفعة الفرقة الرابعة - طب بشري مع الشرح والتلخيصات السريرية.",
+            "is_preview_available": True,
+        }
+    ]
