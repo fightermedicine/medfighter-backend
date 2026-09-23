@@ -988,7 +988,7 @@ async def admin_get_creators(
             select(AuditLog)
             .where(
                 AuditLog.actor_id == c.id,
-                AuditLog.action == "wallet.admin_manual_topup",
+                AuditLog.action.ilike("%topup%"),
             )
         )
         logs = (await db.scalars(log_stmt)).all()
@@ -1147,7 +1147,7 @@ async def admin_get_creator_ledger(
 
     stmt = (
         select(AuditLog)
-        .where(AuditLog.action == "wallet.admin_manual_topup")
+        .where(AuditLog.action.ilike("%topup%"))
         .order_by(desc(AuditLog.created_at))
         .limit(limit)
     )
@@ -1198,7 +1198,7 @@ async def admin_export_creator_ledger(
 
     stmt = (
         select(AuditLog)
-        .where(AuditLog.action == "wallet.admin_manual_topup")
+        .where(AuditLog.action.ilike("%topup%"))
         .order_by(desc(AuditLog.created_at))
         .limit(1000)
     )

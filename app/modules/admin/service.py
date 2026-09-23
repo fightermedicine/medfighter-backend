@@ -515,12 +515,15 @@ async def admin_topup_user(
         user_agent=user_agent,
         details={
             "target_user_id": str(user_id),
+            "target_email": user.email,
             "amount_piastres": amount_piastres,
             "amount_egp": amount_egp,
             "reason": reason,
+            "note": reason,
             "transaction_id": str(tx.id),
         },
     )
+    await db.commit()
 
     return {
         "success": True,
@@ -601,12 +604,15 @@ async def admin_deduct_user_balance(
         user_agent=user_agent,
         details={
             "target_user_id": str(user_id),
+            "target_email": user.email,
             "amount_piastres": amount_piastres,
             "amount_egp": amount_egp,
             "reason": reason,
+            "note": reason,
             "transaction_id": str(tx.id),
         },
     )
+    await db.commit()
 
     return {
         "success": True,

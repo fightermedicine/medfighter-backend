@@ -168,7 +168,7 @@ async def creator_topup_history(
         select(AuditLog)
         .where(
             AuditLog.actor_id == creator.id,
-            AuditLog.action == "wallet.admin_manual_topup",
+            AuditLog.action.ilike("%topup%"),
         )
         .order_by(desc(AuditLog.created_at))
         .limit(limit)
@@ -211,7 +211,7 @@ async def creator_dashboard(
         select(AuditLog)
         .where(
             AuditLog.actor_id == creator.id,
-            AuditLog.action == "wallet.admin_manual_topup",
+            AuditLog.action.ilike("%topup%"),
         )
         .order_by(desc(AuditLog.created_at))
     )
@@ -291,7 +291,7 @@ async def creator_get_students(
         select(AuditLog)
         .where(
             AuditLog.actor_id == creator.id,
-            AuditLog.action == "wallet.admin_manual_topup",
+            AuditLog.action.ilike("%topup%"),
         )
         .order_by(desc(AuditLog.created_at))
         .limit(limit)
