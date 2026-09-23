@@ -934,7 +934,7 @@ async def admin_update_security_settings_endpoint(
 @router.get(
     "/v1/admin/creators",
     status_code=status.HTTP_200_OK,
-    summary="Get list of all creators and their activity stats (Admin only)",
+    summary="Get list of all creators and their activity stats with financial revenue split (Admin only)",
 )
 async def admin_get_creators(
     admin: RequireAdmin,
@@ -942,6 +942,7 @@ async def admin_get_creators(
 ) -> list[dict]:
     from sqlalchemy import select
     from app.modules.identity.models import User, UserRole
+    from app.modules.audit.models import AuditLog
 
     q = (
         select(User)
@@ -951,7 +952,32 @@ async def admin_get_creators(
     )
     creators = (await db.scalars(q)).all()
     results = []
+
     for c in creators:
+        # Aggregate financial metrics from immutable audit logs
+        log_stmt = (
+            select(AuditLog)
+            .where(
+                AuditLog.actor_id == c.id,
+                AuditLog.action == "wallet.admin_manual_topup",
+            )
+        )
+        logs = (await db.scalars(log_stmt)).all()
+
+        total_sales = 0.0
+        students_set = set()
+        for log in logs:
+            det = log.details or {}
+            amt = float(det.get("amount_egp", 0.0))
+            total_sales += amt
+            target = det.get("target_user_id") or det.get("target_email")
+            if target:
+                students_set.add(target)
+
+        # Revenue split: 20% platform cut, 80% creator cut
+        platform_cut = round(total_sales * 0.20, 2)
+        creator_cut = round(total_sales * 0.80, 2)
+
         results.append({
             "id": str(c.id),
             "email": c.email,
@@ -960,8 +986,49 @@ async def admin_get_creators(
             "medical_year": c.medical_year,
             "is_active": c.is_active,
             "created_at": c.created_at.isoformat(),
+            "total_students": len(students_set),
+            "total_transactions": len(logs),
+            "total_sales_egp": round(total_sales, 2),
+            "platform_share_egp": platform_cut,
+            "creator_share_egp": creator_cut,
+            "platform_rate_percent": 20,
         })
     return results
+
+
+@router.post(
+    "/v1/admin/creators/{creator_id}/demote",
+    status_code=status.HTTP_200_OK,
+    summary="Revoke creator role from user (Admin only)",
+)
+async def admin_demote_creator(
+    creator_id: uuid.UUID,
+    admin: RequireAdmin,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from app.modules.identity.models import UserRole
+    from app.modules.audit.models import AuditLog
+
+    q = select(UserRole).where(
+        UserRole.user_id == creator_id,
+        UserRole.role_id == "CREATOR",
+    )
+    ur = await db.scalar(q)
+    if not ur:
+        raise ProblemError(status_code=404, code="creator_not_found", detail="User does not have CREATOR role")
+
+    await db.delete(ur)
+    await record_audit_log(
+        db,
+        action="REVOKE_CREATOR_ROLE",
+        resource_type="User",
+        resource_id=str(creator_id),
+        actor_id=admin.id,
+        actor_role="ADMIN",
+        details={"revoked_user_id": str(creator_id)},
+    )
+    await db.commit()
+    return {"success": True, "message": "Successfully revoked creator privileges"}
 
 
 @router.get(
@@ -972,10 +1039,11 @@ async def admin_get_creators(
 async def admin_get_creator_ledger(
     admin: RequireAdmin,
     db: AsyncSession = Depends(get_db),
-    limit: int = 100,
+    limit: int = 150,
 ) -> list[dict]:
     from sqlalchemy import desc, select
     from app.modules.audit.models import AuditLog
+    from app.modules.identity.models import User
 
     stmt = (
         select(AuditLog)
@@ -984,20 +1052,99 @@ async def admin_get_creator_ledger(
         .limit(limit)
     )
     logs = (await db.scalars(stmt)).all()
+
+    # Pre-fetch creator names
+    creator_ids = {log.actor_id for log in logs if log.actor_id}
+    creators_map = {}
+    if creator_ids:
+        users = (await db.scalars(select(User).where(User.id.in_(creator_ids)))).all()
+        creators_map = {u.id: u.full_name for u in users}
+
     items = []
     for log in logs:
         details = log.details or {}
+        creator_name = creators_map.get(log.actor_id, "System / Admin")
+        amount = float(details.get("amount_egp", 0.0))
         items.append({
             "id": str(log.id),
             "actor_id": str(log.actor_id) if log.actor_id else None,
+            "actor_name": creator_name,
             "actor_role": log.actor_role,
             "transaction_id": details.get("transaction_id", str(log.id)),
             "target_email": details.get("target_email", ""),
             "target_user_id": details.get("target_user_id", ""),
-            "amount_egp": float(details.get("amount_egp", 0.0)),
+            "amount_egp": amount,
+            "platform_cut_egp": round(amount * 0.20, 2),
+            "creator_cut_egp": round(amount * 0.80, 2),
             "note": str(details.get("note", "")),
             "created_at": log.created_at.isoformat(),
         })
     return items
+
+
+@router.get(
+    "/v1/admin/creators/ledger/export",
+    status_code=status.HTTP_200_OK,
+    summary="Export creator topup ledger as CSV (Admin only)",
+)
+async def admin_export_creator_ledger(
+    admin: RequireAdmin,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    from sqlalchemy import desc, select
+    from app.modules.audit.models import AuditLog
+    from app.modules.identity.models import User
+    import io, csv
+
+    stmt = (
+        select(AuditLog)
+        .where(AuditLog.action == "wallet.admin_manual_topup")
+        .order_by(desc(AuditLog.created_at))
+        .limit(1000)
+    )
+    logs = (await db.scalars(stmt)).all()
+
+    creator_ids = {log.actor_id for log in logs if log.actor_id}
+    creators_map = {}
+    if creator_ids:
+        users = (await db.scalars(select(User).where(User.id.in_(creator_ids)))).all()
+        creators_map = {u.id: u.full_name for u in users}
+
+    output = io.StringIO()
+    writer = csv.writer(output)
+    writer.writerow([
+        "Transaction ID",
+        "Creator Name",
+        "Student Email/Phone",
+        "Gross Amount (EGP)",
+        "Platform Share 20% (EGP)",
+        "Creator Net 80% (EGP)",
+        "Note / Booklet",
+        "Timestamp",
+    ])
+
+    for log in logs:
+        details = log.details or {}
+        creator_name = creators_map.get(log.actor_id, "Admin")
+        amount = float(details.get("amount_egp", 0.0))
+        writer.writerow([
+            details.get("transaction_id", str(log.id)),
+            creator_name,
+            details.get("target_email", ""),
+            amount,
+            round(amount * 0.20, 2),
+            round(amount * 0.80, 2),
+            details.get("note", ""),
+            log.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+        ])
+
+    csv_bytes = b"\xef\xbb\xbf" + output.getvalue().encode("utf-8")
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv; charset=utf-8",
+        headers={
+            "Content-Disposition": "attachment; filename*=UTF-8''MedFighter_Creator_Sales_Ledger.csv",
+        },
+    )
 
 
