@@ -541,6 +541,7 @@ async def admin_export_quiz_results_csv(
             str(a["completed_at"]),
         ])
 
+    csv_bytes = output.getvalue().encode("utf-8-sig")
     import urllib.parse
 
     ascii_filename = f"quiz_results_{str(quiz_id)[:8]}.csv"
