@@ -541,14 +541,17 @@ async def admin_export_quiz_results_csv(
             str(a["completed_at"]),
         ])
 
-    csv_bytes = output.getvalue().encode("utf-8-sig")
-    safe_title = "".join(c for c in data["quiz_title"] if c.isalnum() or c in (" ", "_", "-")).strip() or "quiz"
-    filename = f"results_{safe_title}_{str(quiz_id)[:8]}.csv"
+    import urllib.parse
+
+    ascii_filename = f"quiz_results_{str(quiz_id)[:8]}.csv"
+    encoded_filename = urllib.parse.quote(f"results_{data['quiz_title']}_{str(quiz_id)[:8]}.csv")
 
     return Response(
         content=csv_bytes,
         media_type="text/csv",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{ascii_filename}"; filename*=UTF-8\'\'{encoded_filename}'
+        },
     )
 
 
