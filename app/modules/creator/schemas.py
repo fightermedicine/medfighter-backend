@@ -58,4 +58,7 @@ class CreatorDashboardResponse(BaseModel):
     total_amount_credited_egp: float
     total_booklets_published: int = 0
     medzone_booklet_price: float = 0.0
+    assigned_folder_id: str | None = None
+    assigned_folder_name: str | None = None
+    assigned_medical_year: int | None = None
     recent_topups: list[CreatorTopupHistoryItem]

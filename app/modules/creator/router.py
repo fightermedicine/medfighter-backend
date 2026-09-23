@@ -252,6 +252,16 @@ async def creator_dashboard(
     prod_stmt = select(func.count(Product.id)).where(Product.is_active == True)
     total_booklets = await db.scalar(prod_stmt) or 0
 
+    assigned_fid = str(creator.assigned_folder_id) if getattr(creator, "assigned_folder_id", None) else None
+    assigned_name = None
+    assigned_year = None
+    if assigned_fid:
+        from app.modules.curriculum.models import CurriculumFolder
+        cf = await db.get(CurriculumFolder, creator.assigned_folder_id)
+        if cf:
+            assigned_name = cf.name
+            assigned_year = cf.medical_year
+
     return CreatorDashboardResponse(
         creator_id=creator.id,
         creator_name=creator.full_name,
@@ -260,6 +270,9 @@ async def creator_dashboard(
         total_amount_credited_egp=total_amount,
         total_booklets_published=total_booklets,
         medzone_booklet_price=0.0,
+        assigned_folder_id=assigned_fid,
+        assigned_folder_name=assigned_name,
+        assigned_medical_year=assigned_year,
         recent_topups=recent_items,
     )
 

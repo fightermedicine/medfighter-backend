@@ -86,6 +86,7 @@ async def _lifespan(app: FastAPI):  # type: ignore[misc]
             async with get_sessionmaker()() as db:
                 await db.execute(text("ALTER TABLE question_banks ADD COLUMN IF NOT EXISTS exam_mode VARCHAR(32) DEFAULT 'PRACTICE';"))
                 await db.execute(text("ALTER TABLE question_banks ADD COLUMN IF NOT EXISTS show_explanations BOOLEAN DEFAULT TRUE;"))
+                await db.execute(text("ALTER TABLE users ADD COLUMN IF NOT EXISTS assigned_folder_id UUID;"))
                 await db.commit()
         except Exception as e:  # noqa: BLE001
             logger.debug("Safe schema auto-update skipped: %s", e)

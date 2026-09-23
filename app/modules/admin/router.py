@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
 from app.modules.admin.schemas import (
+    AdminAssignCreatorFolderRequest,
     AdminCourseCreateRequest,
     AdminCourseOut,
     AdminCurriculumCreateRequest,
@@ -81,7 +82,7 @@ from app.modules.admin.service import (
     update_security_settings,
     upload_pdf_document,
 )
-from app.modules.identity.deps import RequireAdmin, RequireSuperAdmin
+from app.modules.identity.deps import RequireAdmin, RequireCreator, RequireSuperAdmin
 
 router = APIRouter(prefix="", tags=["admin"])
 
@@ -655,7 +656,7 @@ async def admin_import_deck_file(
     summary="Upload a PDF document to server storage and publish to curriculum (Creator/Admin only)",
 )
 async def admin_upload_pdf(
-    admin: RequireAdmin,
+    creator: RequireCreator,
     db: AsyncSession = Depends(get_db),
     file: UploadFile = File(..., description="PDF file to upload"),
     title: str = Form(..., min_length=2, max_length=255),
@@ -675,9 +676,37 @@ async def admin_upload_pdf(
         except ValueError:
             parsed_folder_id = None
 
+    # Server-side enforcement: Creators can ONLY publish into their admin-assigned path
+    is_admin = any(ur.role_id in ("ADMIN", "SUPER_ADMIN") for ur in creator.roles)
+    if not is_admin:
+        if not creator.assigned_folder_id:
+            raise ProblemError(
+                status_code=403,
+                code="publishing_path_required",
+                detail="You have not been assigned a publishing curriculum folder by an administrator. Please contact an admin to assign your module/folder.",
+            )
+        from app.modules.curriculum.models import CurriculumFolder
+        is_allowed = False
+        if parsed_folder_id == creator.assigned_folder_id:
+            is_allowed = True
+        elif parsed_folder_id is not None:
+            # Check hierarchy if parsed_folder_id is a descendant of assigned_folder_id
+            curr = await db.get(CurriculumFolder, parsed_folder_id)
+            while curr and curr.parent_id:
+                if curr.parent_id == creator.assigned_folder_id:
+                    is_allowed = True
+                    break
+                curr = await db.get(CurriculumFolder, curr.parent_id)
+        if not is_allowed:
+            raise ProblemError(
+                status_code=403,
+                code="unauthorized_folder_path",
+                detail="Creators can only publish content into their administrator-assigned curriculum module/folder.",
+            )
+
     result = await upload_pdf_document(
         db,
-        admin_id=admin.id,
+        admin_id=creator.id,
         file_bytes=file_bytes,
         original_filename=file.filename or "document.pdf",
         title=title,
@@ -978,6 +1007,16 @@ async def admin_get_creators(
         platform_cut = round(total_sales * 0.20, 2)
         creator_cut = round(total_sales * 0.80, 2)
 
+        assigned_fid = str(c.assigned_folder_id) if getattr(c, "assigned_folder_id", None) else None
+        assigned_name = None
+        assigned_year = None
+        if assigned_fid:
+            from app.modules.curriculum.models import CurriculumFolder
+            cf = await db.get(CurriculumFolder, c.assigned_folder_id)
+            if cf:
+                assigned_name = cf.name
+                assigned_year = cf.medical_year
+
         results.append({
             "id": str(c.id),
             "email": c.email,
@@ -992,8 +1031,69 @@ async def admin_get_creators(
             "platform_share_egp": platform_cut,
             "creator_share_egp": creator_cut,
             "platform_rate_percent": 20,
+            "assigned_folder_id": assigned_fid,
+            "assigned_folder_name": assigned_name,
+            "assigned_medical_year": assigned_year,
         })
     return results
+
+
+@router.post(
+    "/v1/admin/creators/{creator_id}/assign-folder",
+    status_code=status.HTTP_200_OK,
+    summary="Assign or reassign designated publishing curriculum folder to creator (Admin only)",
+)
+async def admin_assign_creator_folder(
+    creator_id: uuid.UUID,
+    body: AdminAssignCreatorFolderRequest,
+    admin: RequireAdmin,
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from app.modules.curriculum.models import CurriculumFolder
+    from app.modules.identity.models import User
+    from app.modules.audit.models import AuditLog
+
+    user = await db.get(User, creator_id)
+    if not user:
+        raise ProblemError(status_code=404, code="user_not_found", detail="User not found")
+
+    folder_name = None
+    medical_year = None
+    if body.folder_id and body.folder_id.strip():
+        try:
+            f_uuid = uuid.UUID(body.folder_id.strip())
+        except ValueError:
+            raise ProblemError(status_code=400, code="invalid_folder_id", detail="Invalid folder UUID")
+        cf = await db.get(CurriculumFolder, f_uuid)
+        if not cf:
+            raise ProblemError(status_code=404, code="folder_not_found", detail="Curriculum folder not found")
+        user.assigned_folder_id = cf.id
+        folder_name = cf.name
+        medical_year = cf.medical_year
+    else:
+        user.assigned_folder_id = None
+
+    await record_audit_log(
+        db,
+        action="ASSIGN_CREATOR_FOLDER",
+        resource_type="User",
+        resource_id=str(creator_id),
+        actor_id=admin.id,
+        actor_role="ADMIN",
+        details={
+            "creator_id": str(creator_id),
+            "folder_id": str(user.assigned_folder_id) if user.assigned_folder_id else None,
+            "folder_name": folder_name,
+        },
+    )
+    await db.commit()
+    return {
+        "success": True,
+        "creator_id": str(creator_id),
+        "assigned_folder_id": str(user.assigned_folder_id) if user.assigned_folder_id else None,
+        "assigned_folder_name": folder_name,
+        "assigned_medical_year": medical_year,
+    }
 
 
 @router.post(

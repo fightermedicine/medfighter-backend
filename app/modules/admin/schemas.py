@@ -428,4 +428,8 @@ class SecuritySettingsUpdate(BaseModel):
     allow_screenshots: bool
 
 
+class AdminAssignCreatorFolderRequest(BaseModel):
+    folder_id: str | None = None
+
+
 
