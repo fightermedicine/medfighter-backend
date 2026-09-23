@@ -30,7 +30,7 @@ async def get_curriculum_folders(
     current_user: OptionalUser = None,
 ) -> list[CurriculumFolderOut]:
     response.headers["Cache-Control"] = "no-cache, must-revalidate"
-    if current_user and medical_year is None:
+    if current_user and current_user.role not in ("ADMIN", "CREATOR") and medical_year is None:
         medical_year = current_user.medical_year
     return await list_folders(
         db, medical_year=medical_year, parent_id=parent_id, include_all_descendants=all_descendants
