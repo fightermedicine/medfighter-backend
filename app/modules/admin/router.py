@@ -5,9 +5,11 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile, status
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
+from app.modules.audit.service import record_audit_log
 from app.modules.admin.schemas import (
     AdminAssignCreatorFolderRequest,
     AdminCourseCreateRequest,
