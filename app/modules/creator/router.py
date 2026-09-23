@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.db import get_db
 from app.core.errors import ProblemError
 from app.modules.audit.models import AuditLog
+from app.modules.catalog.models import Product
 from app.modules.identity.deps import RequireCreator
 from app.modules.identity.models import User
 from app.modules.creator.schemas import (
@@ -65,7 +66,7 @@ async def creator_lookup_student(
         raise ProblemError(
             status_code=404,
             code="student_not_found",
-            detail=f"لم يتم العثور على طالب برقم/إيميل: '{clean_id}'. تأكد من تسجيل الطالب أولاً.",
+            detail=f"No student found with identifier: '{clean_id}'. Ensure the student has registered an account first.",
         )
 
     wallet = await get_or_create_wallet(db, target_user.id)
@@ -87,7 +88,7 @@ async def creator_lookup_student(
     "/topup",
     response_model=CreatorTopupResponse,
     status_code=status.HTTP_200_OK,
-    summary="Directly credit a student's wallet (e.g. Medzone booklet 55 EGP)",
+    summary="Directly credit a student's wallet for course booklet access",
 )
 async def creator_topup_student(
     body: CreatorTopupRequest,
@@ -124,16 +125,18 @@ async def creator_topup_student(
         )
         target_user = await db.scalar(q)
 
-    student_name = target_user.full_name if target_user else "يا دكتور"
+    student_name = target_user.full_name if target_user else "Doctor"
     student_phone = target_user.phone if target_user else None
     student_email = target_user.email if target_user else clean_id
     student_id = target_user.id if target_user else creator.id
 
+    student_first = student_name.split()[0] if student_name else "Doctor"
     wa_msg = (
-        f"أهلاً دكتور {student_name} 🩺\n"
-        f"تم شحن محفظتك بـ {body.amount_egp:.0f} جنيه بنجاح! 🎉\n"
-        f"رصيدك الحالي: {res.new_balance_egp:.0f} ج.\n"
-        f"تقدر تفتح تطبيق MedFighter الآن وتفتح مذكرة Medzone Ortho مباشرة بدون أي خطوات إضافية ✨"
+        f"Hello Dr. {student_first},\n"
+        f"Your MedFighter wallet has been credited with {body.amount_egp:.2f} EGP successfully.\n"
+        f"Current Balance: {res.new_balance_egp:.2f} EGP.\n"
+        f"Note: {body.note}\n"
+        f"You can now access your medical booklet directly in the MedFighter app."
     )
 
     return CreatorTopupResponse(
@@ -245,13 +248,18 @@ async def creator_dashboard(
                 )
             )
 
+    # Count published products
+    prod_stmt = select(func.count(Product.id)).where(Product.is_active == True)
+    total_booklets = await db.scalar(prod_stmt) or 0
+
     return CreatorDashboardResponse(
         creator_id=creator.id,
         creator_name=creator.full_name,
         creator_email=creator.email,
         total_students_credited=len(students_set),
         total_amount_credited_egp=total_amount,
-        medzone_booklet_price=55.0,
+        total_booklets_published=total_booklets,
+        medzone_booklet_price=0.0,
         recent_topups=recent_items,
     )
 
@@ -282,7 +290,7 @@ async def creator_get_students(
         details = log.details or {}
         email = details.get("target_email") or details.get("target_user_id") or "Unknown"
         amount = float(details.get("amount_egp", 0.0))
-        note = details.get("note", "Medzone Booklet")
+        note = details.get("note", "Course Booklet")
 
         if email not in student_map:
             student_map[email] = {
@@ -324,17 +332,26 @@ async def creator_get_booklets(
     creator: RequireCreator,
     db: AsyncSession = Depends(get_db),
 ) -> list[dict]:
-    # Default active Medzone flagship booklet + any courses
-    return [
-        {
-            "id": "medzone-ortho-2026",
-            "title": "مذكرة جراحة العظام (Medzone Ortho) 🦴",
+    stmt = (
+        select(Product)
+        .where(Product.is_active == True)
+        .order_by(desc(Product.created_at))
+        .limit(100)
+    )
+    products = (await db.scalars(stmt)).all()
+
+    items: list[dict] = []
+    for p in products:
+        items.append({
+            "id": str(p.id),
+            "title": p.title,
             "author": creator.full_name,
-            "medical_year": 4,
-            "price_egp": 55.0,
-            "status": "ACTIVE",
+            "medical_year": p.medical_year,
+            "folder_id": str(p.folder_id) if p.folder_id else None,
+            "price_egp": p.price_piastres / 100.0,
+            "status": "ACTIVE" if p.is_active else "INACTIVE",
             "format": "Encrypted PDF (DRM Protected)",
-            "description": "المذكرة الرسمية المعتمدة لدفعة الفرقة الرابعة - طب بشري مع الشرح والتلخيصات السريرية.",
-            "is_preview_available": True,
-        }
-    ]
+            "description": p.description or "",
+            "is_preview_available": bool(p.preview_data),
+        })
+    return items

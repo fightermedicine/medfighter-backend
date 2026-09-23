@@ -23,8 +23,8 @@ class CreatorStudentLookupResponse(BaseModel):
 
 class CreatorTopupRequest(BaseModel):
     identifier: str = Field(..., min_length=2, max_length=255, description="Student phone, email, or user ID")
-    amount_egp: float = Field(55.0, ge=1.0, le=10000.0, description="Amount to credit in EGP")
-    note: str = Field("Medzone Ortho Booklet - Dr. Ahmed Talaat", max_length=255, description="Reason / booklet description")
+    amount_egp: float = Field(..., ge=1.0, le=10000.0, description="Amount to credit in EGP")
+    note: str = Field("Creator Booklet Credit", max_length=255, description="Reason / booklet description")
 
 
 class CreatorTopupResponse(BaseModel):
@@ -56,5 +56,6 @@ class CreatorDashboardResponse(BaseModel):
     creator_email: str
     total_students_credited: int
     total_amount_credited_egp: float
-    medzone_booklet_price: float = 55.0
+    total_booklets_published: int = 0
+    medzone_booklet_price: float = 0.0
     recent_topups: list[CreatorTopupHistoryItem]
