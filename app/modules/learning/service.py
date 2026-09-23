@@ -16,6 +16,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.errors import ProblemError
+from app.modules.curriculum.models import CurriculumFolder
+from app.modules.curriculum.service import get_folder_and_descendant_ids
 from app.modules.learning.models import (
     AttemptAnswer,
     Card,
@@ -65,6 +67,8 @@ async def list_question_banks(
     db: AsyncSession,
     medical_year: int | None = None,
     folder_id: uuid.UUID | None = None,
+    root_only: bool = False,
+    user_id: uuid.UUID | None = None,
 ) -> list[QuestionBankOut]:
     """List active question banks optionally filtered by medical year and folder."""
     query = (
@@ -79,14 +83,31 @@ async def list_question_banks(
     if medical_year is not None:
         query = query.where(QuestionBank.medical_year == medical_year)
     if folder_id is not None:
-        query = query.where(QuestionBank.folder_id == folder_id)
+        target_ids = await get_folder_and_descendant_ids(db, folder_id)
+        query = query.where(QuestionBank.folder_id.in_(target_ids))
+    elif root_only:
+        query = query.where(QuestionBank.folder_id.is_(None))
 
     query = query.group_by(QuestionBank.id).order_by(QuestionBank.created_at.desc())
     result = await db.execute(query)
     rows = result.all()
 
+    # If user_id is provided, fetch latest completed attempt per bank for status badge
+    user_attempts: dict[uuid.UUID, QuizAttempt] = {}
+    if user_id is not None:
+        att_stmt = (
+            select(QuizAttempt)
+            .where(QuizAttempt.user_id == user_id, QuizAttempt.completed_at.is_not(None))
+            .order_by(QuizAttempt.completed_at.desc())
+        )
+        att_res = await db.execute(att_stmt)
+        for att in att_res.scalars().all():
+            if att.bank_id not in user_attempts:
+                user_attempts[att.bank_id] = att
+
     banks = []
     for bank, count in rows:
+        att = user_attempts.get(bank.id)
         banks.append(
             QuestionBankOut(
                 id=bank.id,
@@ -99,17 +120,26 @@ async def list_question_banks(
                 pass_percentage=bank.pass_percentage,
                 is_active=bank.is_active,
                 question_count=count,
+                exam_mode=getattr(bank, "exam_mode", "PRACTICE") or "PRACTICE",
+                show_explanations=getattr(bank, "show_explanations", True),
+                has_attempted=att is not None,
+                user_score=att.score if att else None,
+                user_percentage=att.percentage if att else None,
+                user_passed=att.passed if att else None,
                 created_at=bank.created_at,
             )
         )
     return banks
 
 
-async def get_quiz_for_taking(db: AsyncSession, bank_id: uuid.UUID) -> QuizStartOut:
+async def get_quiz_for_taking(
+    db: AsyncSession, bank_id: uuid.UUID, user_id: uuid.UUID | None = None
+) -> QuizStartOut:
     """Fetch question bank for taking.
 
     CRITICAL SECURITY INVARIANT (§35):
     Neither `is_correct` nor `explanation` are included in the returned payload.
+    For OFFICIAL exams: verify user has not completed it previously.
     """
     query = (
         select(QuestionBank)
@@ -122,6 +152,22 @@ async def get_quiz_for_taking(db: AsyncSession, bank_id: uuid.UUID) -> QuizStart
         raise ProblemError(
             status_code=404, code="not_found", detail="Question bank not found or inactive"
         )
+
+    # Server enforcement for OFFICIAL exam single-attempt invariant
+    if getattr(bank, "exam_mode", "PRACTICE") == "OFFICIAL" and user_id is not None:
+        prior_att = await db.scalar(
+            select(QuizAttempt.id).where(
+                QuizAttempt.bank_id == bank_id,
+                QuizAttempt.user_id == user_id,
+                QuizAttempt.completed_at.is_not(None),
+            )
+        )
+        if prior_att:
+            raise ProblemError(
+                status_code=403,
+                code="exam_already_completed",
+                detail="لقد قمت بإجراء هذا الاختبار الرسمي بالفعل، ولا يُسمح بإعادة المحاولة.",
+            )
 
     import random as _random
 
@@ -153,6 +199,8 @@ async def get_quiz_for_taking(db: AsyncSession, bank_id: uuid.UUID) -> QuizStart
         category=bank.category,
         time_limit_seconds=bank.time_limit_seconds,
         pass_percentage=bank.pass_percentage,
+        exam_mode=getattr(bank, "exam_mode", "PRACTICE") or "PRACTICE",
+        show_explanations=getattr(bank, "show_explanations", True),
         questions=questions_out,
     )
 
@@ -174,6 +222,22 @@ async def submit_quiz(
     if not bank:
         raise ProblemError(status_code=404, code="not_found", detail="Question bank not found")
 
+    # Strict server enforcement: block second submission on OFFICIAL exams
+    if getattr(bank, "exam_mode", "PRACTICE") == "OFFICIAL":
+        prior_att = await db.scalar(
+            select(QuizAttempt.id).where(
+                QuizAttempt.bank_id == bank_id,
+                QuizAttempt.user_id == user_id,
+                QuizAttempt.completed_at.is_not(None),
+            )
+        )
+        if prior_att:
+            raise ProblemError(
+                status_code=403,
+                code="exam_already_completed",
+                detail="لقد قمت بتسليم هذا الاختبار الرسمي مسبقاً، ولا يُسمح بإعادة المحاولة.",
+            )
+
     user_answers = {ans.question_id: ans.selected_option_id for ans in payload.answers}
 
     total_score = 0
@@ -193,11 +257,13 @@ async def submit_quiz(
         points_earned = q.points if is_correct else 0
         total_score += points_earned
 
+        show_expl = getattr(bank, "show_explanations", True)
+
         graded_options = [
             GradedOptionOut(
                 id=opt.id,
                 text=opt.text,
-                is_correct=opt.is_correct,
+                is_correct=opt.is_correct if show_expl else False,
                 order_index=opt.order_index,
             )
             for opt in q.options
@@ -207,9 +273,9 @@ async def submit_quiz(
             GradedQuestionOut(
                 question_id=q.id,
                 stem=q.stem,
-                explanation=q.explanation,
+                explanation=q.explanation if show_expl else "",
                 selected_option_id=selected_opt_id,
-                correct_option_id=correct_opt_id,
+                correct_option_id=correct_opt_id if show_expl else None,
                 is_correct=is_correct,
                 points_earned=points_earned,
                 max_points=q.points,
@@ -319,6 +385,7 @@ async def list_decks(
     user_id: uuid.UUID,
     medical_year: int | None = None,
     folder_id: uuid.UUID | None = None,
+    root_only: bool = False,
 ) -> list[DeckResponse]:
     """List accessible decks with due counts for current user optionally filtered by medical year & folder."""
     total_subq = (
@@ -334,7 +401,10 @@ async def list_decks(
     if medical_year is not None:
         deck_query = deck_query.where(Deck.medical_year == medical_year)
     if folder_id is not None:
-        deck_query = deck_query.where(Deck.folder_id == folder_id)
+        target_ids = await get_folder_and_descendant_ids(db, folder_id)
+        deck_query = deck_query.where(Deck.folder_id.in_(target_ids))
+    elif root_only:
+        deck_query = deck_query.where(Deck.folder_id.is_(None))
 
     deck_query = deck_query.order_by(Deck.created_at.desc())
     results = (await db.execute(deck_query)).all()

@@ -54,6 +54,7 @@ async def get_quizzes(
     db: DbSession,
     medical_year: int | None = Query(None, ge=1, le=6),
     folder_id: uuid.UUID | None = Query(None),
+    root_only: bool = Query(False),
     current_user: OptionalUser = None,
 ) -> list[QuestionBankOut]:
     """List active question banks and quiz banks available for study."""
@@ -61,7 +62,13 @@ async def get_quizzes(
         is_admin = any(ur.role_id in ("ADMIN", "SUPER_ADMIN") for ur in current_user.roles)
         if not is_admin:
             medical_year = current_user.medical_year
-    return await list_question_banks(db, medical_year=medical_year, folder_id=folder_id)
+    return await list_question_banks(
+        db,
+        medical_year=medical_year,
+        folder_id=folder_id,
+        root_only=root_only,
+        user_id=current_user.id if current_user else None,
+    )
 
 
 @router.get("/quizzes/{bank_id}", response_model=QuizStartOut)
@@ -71,7 +78,7 @@ async def start_quiz(
     current_user: RequireUser,
 ) -> QuizStartOut:
     """Fetch quiz questions without answers or explanations (Server Authority §35)."""
-    return await get_quiz_for_taking(db, bank_id)
+    return await get_quiz_for_taking(db, bank_id, user_id=current_user.id)
 
 
 @router.post("/quizzes/{bank_id}/submit", response_model=QuizResultResponse)
@@ -99,6 +106,7 @@ async def get_decks(
     current_user: RequireUser,
     medical_year: int | None = Query(None, ge=1, le=6),
     folder_id: uuid.UUID | None = Query(None),
+    root_only: bool = Query(False),
 ) -> list[DeckResponse]:
     """List available decks and cards due for current user."""
     is_admin = any(ur.role_id in ("ADMIN", "SUPER_ADMIN") for ur in current_user.roles)
@@ -109,6 +117,7 @@ async def get_decks(
         user_id=current_user.id,
         medical_year=medical_year,
         folder_id=folder_id,
+        root_only=root_only,
     )
 
 

@@ -20,6 +20,8 @@ class QuestionBankCreate(BaseModel):
     category: str = Field(default="General Medicine", max_length=64)
     time_limit_seconds: int | None = Field(default=None, ge=10, le=86400)
     pass_percentage: int = Field(default=60, ge=1, le=100)
+    exam_mode: str = Field(default="PRACTICE", max_length=32)
+    show_explanations: bool = True
 
 
 class QuestionBankOut(BaseModel):
@@ -33,6 +35,12 @@ class QuestionBankOut(BaseModel):
     pass_percentage: int
     is_active: bool
     question_count: int
+    exam_mode: str = "PRACTICE"
+    show_explanations: bool = True
+    has_attempted: bool = False
+    user_score: int | None = None
+    user_percentage: float | None = None
+    user_passed: bool | None = None
     created_at: datetime
 
     model_config = {"from_attributes": True}
@@ -63,6 +71,8 @@ class QuizStartOut(BaseModel):
     category: str
     time_limit_seconds: int | None
     pass_percentage: int
+    exam_mode: str = "PRACTICE"
+    show_explanations: bool = True
     questions: list[QuestionPublicOut]
 
 

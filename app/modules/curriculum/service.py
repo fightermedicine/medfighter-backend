@@ -221,3 +221,25 @@ async def delete_folder(
 
     await db.delete(folder)
     await db.commit()
+
+
+async def get_folder_and_descendant_ids(
+    db: AsyncSession, folder_id: uuid.UUID
+) -> list[uuid.UUID]:
+    """Get the target folder ID along with all of its recursive descendant folder IDs."""
+    all_folders = (await db.scalars(select(CurriculumFolder))).all()
+    children_by_parent: dict[uuid.UUID, list[uuid.UUID]] = defaultdict(list)
+    for f in all_folders:
+        if f.parent_id is not None:
+            children_by_parent[f.parent_id].append(f.id)
+
+    result = [folder_id]
+    queue = [folder_id]
+    while queue:
+        curr = queue.pop(0)
+        for child_id in children_by_parent.get(curr, []):
+            if child_id not in result:
+                result.append(child_id)
+                queue.append(child_id)
+    return result
+

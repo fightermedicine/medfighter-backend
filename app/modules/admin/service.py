@@ -36,6 +36,7 @@ from app.modules.admin.schemas import (
 from app.modules.audit.service import record_audit_log
 from app.modules.catalog.models import Bundle, BundleItem, PriceRule, Product, ProductVersion
 from app.modules.content.models import ContentAsset
+from app.modules.curriculum.models import CurriculumFolder
 from app.modules.entitlement.models import DeviceLicense, Entitlement
 from app.modules.identity.models import Device, Role, User, UserRole
 from app.modules.identity.models import Session as UserSession
@@ -1155,9 +1156,18 @@ async def create_mcq_quiz(
     folder_id: uuid.UUID | None = None,
     pass_percentage: int,
     time_limit_seconds: int | None,
+    exam_mode: str = "PRACTICE",
+    show_explanations: bool = True,
     questions_data: list,
 ) -> dict:
     """Author a server-authoritative clinical MCQ quiz with questions & choices."""
+    if folder_id is not None:
+        folder = await db.scalar(
+            select(CurriculumFolder).where(CurriculumFolder.id == folder_id)
+        )
+        if folder:
+            medical_year = folder.medical_year
+
     bank = QuestionBank(
         title=title,
         description=description,
@@ -1166,6 +1176,8 @@ async def create_mcq_quiz(
         folder_id=folder_id,
         pass_percentage=pass_percentage,
         time_limit_seconds=time_limit_seconds,
+        exam_mode=exam_mode,
+        show_explanations=show_explanations,
         is_active=True,
     )
     db.add(bank)
@@ -1297,6 +1309,10 @@ async def list_admin_quizzes(db: AsyncSession) -> list[dict]:
                 "medical_year": getattr(b, "medical_year", 1) or 1,
                 "folder_id": getattr(b, "folder_id", None),
                 "pass_percentage": b.pass_percentage,
+                "time_limit_seconds": b.time_limit_seconds,
+                "is_active": b.is_active,
+                "exam_mode": getattr(b, "exam_mode", "PRACTICE") or "PRACTICE",
+                "show_explanations": getattr(b, "show_explanations", True),
                 "questions_count": q_count or 0,
                 "attempts_count": att_count or 0,
                 "created_at": b.created_at,
@@ -1317,6 +1333,13 @@ async def create_flashcard_deck(
     cards_data: list,
 ) -> dict:
     """Author a Spaced Repetition flashcard deck with individual cards."""
+    if folder_id is not None:
+        folder = await db.scalar(
+            select(CurriculumFolder).where(CurriculumFolder.id == folder_id)
+        )
+        if folder:
+            medical_year = folder.medical_year
+
     deck = Deck(
         title=title,
         description=description,
@@ -1499,6 +1522,13 @@ async def upload_pdf_document(
     final_storage_path = public_url if public_url else stored_path
 
     # 3. Create Product catalog entry (product_type = 'memo')
+    if folder_id is not None:
+        folder = await db.scalar(
+            select(CurriculumFolder).where(CurriculumFolder.id == folder_id)
+        )
+        if folder:
+            medical_year = folder.medical_year
+
     price_piastres = egp_to_piastres(price_egp)
     product = Product(
         title=title,
@@ -2050,6 +2080,12 @@ async def update_published_course(
         course.medical_year = payload.medical_year
     if "folder_id" in payload.model_fields_set:
         course.folder_id = payload.folder_id
+        if payload.folder_id is not None:
+            folder = await db.scalar(
+                select(CurriculumFolder).where(CurriculumFolder.id == payload.folder_id)
+            )
+            if folder:
+                course.medical_year = folder.medical_year
     if "preview_data" in payload.model_fields_set:
         course.preview_data = payload.preview_data
     if payload.is_active is not None:
@@ -2115,6 +2151,10 @@ async def update_mcq_quiz(
         quiz.time_limit_seconds = payload.time_limit_seconds
     if payload.is_active is not None:
         quiz.is_active = payload.is_active
+    if payload.exam_mode is not None:
+        quiz.exam_mode = payload.exam_mode.strip()
+    if payload.show_explanations is not None:
+        quiz.show_explanations = payload.show_explanations
 
     await db.commit()
     await db.refresh(quiz)
@@ -2139,6 +2179,92 @@ async def update_mcq_quiz(
         "pass_percentage": quiz.pass_percentage,
         "time_limit_seconds": quiz.time_limit_seconds,
         "is_active": quiz.is_active,
+        "exam_mode": getattr(quiz, "exam_mode", "PRACTICE") or "PRACTICE",
+        "show_explanations": getattr(quiz, "show_explanations", True),
+    }
+
+
+async def get_quiz_admin_results(db: AsyncSession, quiz_id: uuid.UUID) -> dict:
+    """Fetch complete student results ledger and telemetry metrics for a quiz."""
+    quiz = await db.get(QuestionBank, quiz_id)
+    if not quiz:
+        raise ProblemError(status_code=404, code="not_found", detail="MCQ quiz not found.")
+
+    from app.modules.identity.models import User
+
+    stmt = (
+        select(QuizAttempt, User)
+        .join(User, User.id == QuizAttempt.user_id)
+        .where(QuizAttempt.bank_id == quiz_id, QuizAttempt.completed_at.is_not(None))
+        .order_by(QuizAttempt.score.desc(), QuizAttempt.completed_at.desc())
+    )
+    rows = (await db.execute(stmt)).all()
+
+    attempts = []
+    unique_users = set()
+    total_pct = 0.0
+    highest_pct = 0.0
+    lowest_pct = 100.0 if rows else 0.0
+    pass_count = 0
+    fail_count = 0
+
+    for att, user in rows:
+        unique_users.add(user.id)
+        pct = float(att.percentage or 0.0)
+        total_pct += pct
+        if pct > highest_pct:
+            highest_pct = pct
+        if pct < lowest_pct:
+            lowest_pct = pct
+
+        if att.passed:
+            pass_count += 1
+        else:
+            fail_count += 1
+
+        time_spent = 0
+        if att.completed_at and att.started_at:
+            time_spent = max(0, int((att.completed_at - att.started_at).total_seconds()))
+
+        attempts.append(
+            {
+                "attempt_id": att.id,
+                "user_id": user.id,
+                "student_name": user.full_name or "Unknown",
+                "student_email": user.email,
+                "student_phone": user.phone,
+                "medical_year": user.medical_year or 1,
+                "score": att.score,
+                "max_score": att.max_score,
+                "percentage": round(pct, 1),
+                "passed": att.passed,
+                "started_at": att.started_at,
+                "completed_at": att.completed_at,
+                "time_spent_seconds": time_spent,
+            }
+        )
+
+    total_attempts = len(attempts)
+    avg_pct = round(total_pct / total_attempts, 1) if total_attempts > 0 else 0.0
+    pass_rate = round((pass_count / total_attempts) * 100, 1) if total_attempts > 0 else 0.0
+
+    return {
+        "quiz_id": quiz.id,
+        "quiz_title": quiz.title,
+        "exam_mode": getattr(quiz, "exam_mode", "PRACTICE") or "PRACTICE",
+        "pass_percentage": quiz.pass_percentage,
+        "time_limit_seconds": quiz.time_limit_seconds,
+        "summary": {
+            "total_attempts": total_attempts,
+            "total_students": len(unique_users),
+            "average_percentage": avg_pct,
+            "highest_percentage": round(highest_pct, 1),
+            "lowest_percentage": round(lowest_pct, 1),
+            "pass_rate_percentage": pass_rate,
+            "pass_count": pass_count,
+            "fail_count": fail_count,
+        },
+        "attempts": attempts,
     }
 
 

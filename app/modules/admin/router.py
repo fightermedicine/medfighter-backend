@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 
-from fastapi import APIRouter, Depends, File, Form, Request, UploadFile, status
+from fastapi import APIRouter, Depends, File, Form, Request, Response, UploadFile, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.db import get_db
@@ -22,6 +22,7 @@ from app.modules.admin.schemas import (
     AdminPromoteRequest,
     AdminQuizCreateRequest,
     AdminQuizOut,
+    AdminQuizResultsResponse,
     AdminQuizUpdateRequest,
     AdminStatsOut,
     AdminTeamMemberOut,
@@ -57,6 +58,7 @@ from app.modules.admin.service import (
     emergency_lockdown,
     get_admin_stats,
     get_contact_info,
+    get_quiz_admin_results,
     get_security_settings,
     grant_user_entitlement_admin,
     list_admin_courses,
@@ -458,6 +460,8 @@ async def admin_create_quiz(
         folder_id=payload.folder_id,
         pass_percentage=payload.pass_percentage,
         time_limit_seconds=payload.time_limit_seconds,
+        exam_mode=payload.exam_mode,
+        show_explanations=payload.show_explanations,
         questions_data=payload.questions,
     )
     return AdminQuizOut(**quiz)
@@ -475,6 +479,77 @@ async def admin_list_quizzes(
 ) -> list[AdminQuizOut]:
     quizzes = await list_admin_quizzes(db)
     return [AdminQuizOut(**q) for q in quizzes]
+
+
+@router.get(
+    "/v1/admin/quizzes/{quiz_id}/results",
+    response_model=AdminQuizResultsResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Fetch student performance ledger, rankings, and telemetry for a quiz (Admin only)",
+)
+async def admin_get_quiz_results(
+    quiz_id: uuid.UUID,
+    admin: RequireAdmin,
+    db: AsyncSession = Depends(get_db),
+) -> AdminQuizResultsResponse:
+    results = await get_quiz_admin_results(db, quiz_id=quiz_id)
+    return AdminQuizResultsResponse(**results)
+
+
+@router.get(
+    "/v1/admin/quizzes/{quiz_id}/results/export",
+    status_code=status.HTTP_200_OK,
+    summary="Export student quiz ledger as CSV (Admin only)",
+)
+async def admin_export_quiz_results_csv(
+    quiz_id: uuid.UUID,
+    admin: RequireAdmin,
+    db: AsyncSession = Depends(get_db),
+) -> Response:
+    import csv
+    import io
+
+    data = await get_quiz_admin_results(db, quiz_id=quiz_id)
+    output = io.StringIO()
+    writer = csv.writer(output)
+
+    # Header
+    writer.writerow([
+        "Student Name",
+        "Email",
+        "Phone",
+        "Medical Year",
+        "Score",
+        "Max Score",
+        "Percentage",
+        "Status",
+        "Time Spent (seconds)",
+        "Submitted At",
+    ])
+
+    for a in data["attempts"]:
+        writer.writerow([
+            a["student_name"],
+            a["student_email"],
+            a["student_phone"] or "",
+            a["medical_year"],
+            a["score"],
+            a["max_score"],
+            f"{a['percentage']}%",
+            "PASSED" if a["passed"] else "FAILED",
+            a["time_spent_seconds"],
+            str(a["completed_at"]),
+        ])
+
+    csv_bytes = output.getvalue().encode("utf-8-sig")
+    safe_title = "".join(c for c in data["quiz_title"] if c.isalnum() or c in (" ", "_", "-")).strip() or "quiz"
+    filename = f"results_{safe_title}_{str(quiz_id)[:8]}.csv"
+
+    return Response(
+        content=csv_bytes,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post(

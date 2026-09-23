@@ -50,6 +50,8 @@ class QuestionBank(Base):
     time_limit_seconds: Mapped[int | None] = mapped_column(Integer, nullable=True)
     pass_percentage: Mapped[int] = mapped_column(Integer, nullable=False, default=60)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    exam_mode: Mapped[str] = mapped_column(String(32), default="PRACTICE", nullable=False)
+    show_explanations: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=_utc_now, nullable=False
     )

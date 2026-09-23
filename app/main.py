@@ -79,6 +79,16 @@ async def _lifespan(app: FastAPI):  # type: ignore[misc]
         from app.modules.telegram.handlers import configure_admin_usernames
         from app.modules.telegram.router import set_webhook_secret
 
+        # Safe schema auto-update for QuestionBank exam_mode
+        try:
+            from sqlalchemy import text
+            async with get_sessionmaker()() as db:
+                await db.execute(text("ALTER TABLE question_banks ADD COLUMN IF NOT EXISTS exam_mode VARCHAR(32) DEFAULT 'PRACTICE';"))
+                await db.execute(text("ALTER TABLE question_banks ADD COLUMN IF NOT EXISTS show_explanations BOOLEAN DEFAULT TRUE;"))
+                await db.commit()
+        except Exception as e:  # noqa: BLE001
+            logger.debug("Safe schema auto-update skipped: %s", e)
+
         # Fetch contact info
         try:
             async with asyncio.timeout(3.0):

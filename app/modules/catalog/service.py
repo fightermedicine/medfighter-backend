@@ -17,6 +17,8 @@ from app.core.errors import NotFound
 from app.core.money import egp_to_piastres
 from app.modules.audit.service import record_audit_log
 from app.modules.catalog.models import Bundle, Product, ProductVersion
+from app.modules.curriculum.models import CurriculumFolder
+from app.modules.curriculum.service import get_folder_and_descendant_ids
 from app.modules.catalog.schemas import (
     BundleItemOut,
     BundleOut,
@@ -155,6 +157,14 @@ async def create_product(
 ) -> ProductResponse:
     """Create a new product with authoritative integer-piastres pricing."""
     piastres = egp_to_piastres(request.price_egp)
+    medical_year = request.medical_year
+    if request.folder_id is not None:
+        folder = await db.scalar(
+            select(CurriculumFolder).where(CurriculumFolder.id == request.folder_id)
+        )
+        if folder:
+            medical_year = folder.medical_year
+
     product = Product(
         title=request.title,
         description=request.description,
@@ -162,7 +172,7 @@ async def create_product(
         currency="EGP",
         category=request.category,
         product_type=request.product_type,
-        medical_year=request.medical_year,
+        medical_year=medical_year,
         folder_id=request.folder_id,
         preview_data=request.preview_data,
         is_active=True,
@@ -205,8 +215,9 @@ async def list_active_products(
     db: AsyncSession,
     medical_year: int | None = None,
     folder_id: uuid.UUID | None = None,
+    root_only: bool = False,
 ) -> list[ProductResponse]:
-    """List all active published products with price rules, bundles, and year filtering."""
+    """List all active published products with price rules, bundles, and year/folder filtering."""
     query = (
         select(Product, Product.preview_data.isnot(None).label("has_preview"))
         .options(
@@ -220,7 +231,10 @@ async def list_active_products(
     if medical_year is not None:
         query = query.where(Product.medical_year == medical_year)
     if folder_id is not None:
-        query = query.where(Product.folder_id == folder_id)
+        target_ids = await get_folder_and_descendant_ids(db, folder_id)
+        query = query.where(Product.folder_id.in_(target_ids))
+    elif root_only:
+        query = query.where(Product.folder_id.is_(None))
 
     query = query.order_by(Product.created_at.desc())
     results = (await db.execute(query)).all()

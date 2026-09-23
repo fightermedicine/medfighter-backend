@@ -225,6 +225,8 @@ class AdminQuizCreateRequest(BaseModel):
     folder_id: uuid.UUID | None = None
     pass_percentage: int = Field(60, ge=0, le=100)
     time_limit_seconds: int | None = Field(None, ge=10)
+    exam_mode: str = Field("PRACTICE", max_length=32)
+    show_explanations: bool = True
     questions: list[AdminQuestionIn] = Field(..., min_length=1)
 
 
@@ -236,6 +238,10 @@ class AdminQuizOut(BaseModel):
     medical_year: int = 1
     folder_id: uuid.UUID | None = None
     pass_percentage: int
+    time_limit_seconds: int | None = None
+    is_active: bool = True
+    exam_mode: str = "PRACTICE"
+    show_explanations: bool = True
     questions_count: int
     attempts_count: int
     created_at: datetime
@@ -339,6 +345,45 @@ class AdminQuizUpdateRequest(BaseModel):
     pass_percentage: int | None = Field(None, ge=0, le=100)
     time_limit_seconds: int | None = Field(None, ge=0)
     is_active: bool | None = None
+    exam_mode: str | None = None
+    show_explanations: bool | None = None
+
+
+class StudentExamAttemptOut(BaseModel):
+    attempt_id: uuid.UUID
+    user_id: uuid.UUID
+    student_name: str
+    student_email: str
+    student_phone: str | None = None
+    medical_year: int = 1
+    score: int
+    max_score: int
+    percentage: float
+    passed: bool
+    started_at: datetime
+    completed_at: datetime
+    time_spent_seconds: int = 0
+
+
+class AdminQuizResultsSummaryOut(BaseModel):
+    total_attempts: int
+    total_students: int
+    average_percentage: float
+    highest_percentage: float
+    lowest_percentage: float
+    pass_rate_percentage: float
+    pass_count: int
+    fail_count: int
+
+
+class AdminQuizResultsResponse(BaseModel):
+    quiz_id: uuid.UUID
+    quiz_title: str
+    exam_mode: str
+    pass_percentage: int
+    time_limit_seconds: int | None = None
+    summary: AdminQuizResultsSummaryOut
+    attempts: list[StudentExamAttemptOut]
 
 
 class AdminDeckUpdateRequest(BaseModel):
