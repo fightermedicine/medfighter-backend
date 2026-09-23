@@ -1190,13 +1190,16 @@ async def create_mcq_quiz(
             if isinstance(ca, int) and 0 <= ca < len(q_in.options):
                 target_correct_idx = ca
             elif isinstance(ca, str):
+                import re
                 ca_clean = ca.strip()
-                if len(ca_clean) == 1 and ca_clean.upper() in ("A", "B", "C", "D", "E", "F"):
-                    idx = ord(ca_clean.upper()) - ord("A")
+                letter_match = re.match(r"^(?:option\s+)?\(?([A-Fa-f])\)?\.?$", ca_clean, re.IGNORECASE)
+                num_match = re.match(r"^(?:option\s+)?\(?(\d+)\)?\.?$", ca_clean, re.IGNORECASE)
+                if letter_match:
+                    idx = ord(letter_match.group(1).upper()) - ord("A")
                     if 0 <= idx < len(q_in.options):
                         target_correct_idx = idx
-                elif ca_clean.isdigit():
-                    idx = int(ca_clean)
+                elif num_match:
+                    idx = int(num_match.group(1))
                     if 0 <= idx < len(q_in.options):
                         target_correct_idx = idx
                     elif 1 <= idx <= len(q_in.options):
@@ -1207,12 +1210,28 @@ async def create_mcq_quiz(
                             target_correct_idx = i
                             break
 
+        # Collect options with resolved correctness
+        prepared_options = []
         for opt_idx, opt_in in enumerate(q_in.options):
             is_corr = (target_correct_idx == opt_idx) if target_correct_idx is not None else opt_in.is_correct
+            prepared_options.append({
+                "text": opt_in.text,
+                "is_correct": is_corr,
+            })
+
+        # Ensure at least one option is marked correct if none was marked
+        if not any(o["is_correct"] for o in prepared_options) and prepared_options:
+            prepared_options[0]["is_correct"] = True
+
+        # Randomize options order on creation so option A is not systematically correct
+        import random as _random
+        _random.shuffle(prepared_options)
+
+        for opt_idx, opt_dict in enumerate(prepared_options):
             option = QuestionOption(
                 question_id=question.id,
-                text=opt_in.text,
-                is_correct=is_corr,
+                text=opt_dict["text"],
+                is_correct=opt_dict["is_correct"],
                 order_index=opt_idx,
             )
             db.add(option)

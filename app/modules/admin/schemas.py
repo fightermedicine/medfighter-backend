@@ -4,8 +4,9 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class AdminStatsOut(BaseModel):
@@ -175,6 +176,13 @@ class AdminOptionIn(BaseModel):
     text: str = Field(..., min_length=1)
     is_correct: bool = Field(False)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _coerce_string(cls, data: Any) -> Any:
+        if isinstance(data, str):
+            return {"text": data.strip(), "is_correct": False}
+        return data
+
 
 class AdminQuestionIn(BaseModel):
     stem: str = Field(..., min_length=1)
@@ -182,6 +190,31 @@ class AdminQuestionIn(BaseModel):
     points: int = Field(1, ge=1)
     options: list[AdminOptionIn] = Field(..., min_length=2)
     correct_answer: str | int | None = Field(None, description="Optional indicator of correct answer (e.g. 'A', 'B', 0, 1, or text)")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _normalize_correct_answer(cls, data: Any) -> Any:
+        if isinstance(data, dict):
+            if data.get("correct_answer") is None:
+                for alias in (
+                    "answer",
+                    "correctAnswer",
+                    "correct-answer",
+                    "correct",
+                    "correct_option",
+                    "correctOption",
+                    "correct_choice",
+                    "correctChoice",
+                    "answer_index",
+                    "answerIndex",
+                    "ans",
+                    "key",
+                    "solution",
+                ):
+                    if alias in data and data[alias] is not None:
+                        data["correct_answer"] = data[alias]
+                        break
+        return data
 
 
 class AdminQuizCreateRequest(BaseModel):
