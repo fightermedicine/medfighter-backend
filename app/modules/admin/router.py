@@ -660,7 +660,10 @@ async def admin_import_deck_file(
 async def admin_upload_pdf(
     creator: RequireCreator,
     db: AsyncSession = Depends(get_db),
-    file: UploadFile = File(..., description="PDF file to upload"),
+    file: UploadFile | None = File(None, description="PDF file to upload"),
+    file_url: str | None = Form(None, description="Pre-uploaded public URL for large PDFs"),
+    file_size: int | None = Form(None, description="File size in bytes if pre-uploaded"),
+    original_filename: str | None = Form(None, description="Original filename if pre-uploaded"),
     title: str = Form(..., min_length=2, max_length=255),
     description: str = Form("", max_length=1000),
     price_egp: float = Form(0.0, ge=0.0),
@@ -669,7 +672,18 @@ async def admin_upload_pdf(
     folder_id: str | None = Form(None),
     thumbnail_b64: str | None = Form(None),
 ) -> AdminPdfUploadOut:
-    file_bytes = await file.read()
+    file_bytes = None
+    resolved_filename = original_filename or "document.pdf"
+    if file is not None and file.filename:
+        file_bytes = await file.read()
+        resolved_filename = file.filename
+    elif not file_url:
+        raise ProblemError(
+            status_code=400,
+            code="missing_file",
+            detail="Either a PDF file or a pre-uploaded file_url must be provided.",
+        )
+
     parsed_folder_id = None
     if folder_id and folder_id.strip():
         import uuid as _uuid
@@ -710,7 +724,9 @@ async def admin_upload_pdf(
         db,
         admin_id=creator.id,
         file_bytes=file_bytes,
-        original_filename=file.filename or "document.pdf",
+        file_url=file_url,
+        file_size=file_size or 0,
+        original_filename=resolved_filename,
         title=title,
         description=description,
         price_egp=price_egp,

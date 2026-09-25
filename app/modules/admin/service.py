@@ -1495,7 +1495,9 @@ async def upload_pdf_document(
     db: AsyncSession,
     *,
     admin_id: uuid.UUID,
-    file_bytes: bytes,
+    file_bytes: bytes | None = None,
+    file_url: str | None = None,
+    file_size: int = 0,
     original_filename: str,
     title: str,
     description: str,
@@ -1509,23 +1511,32 @@ async def upload_pdf_document(
     import hashlib as _hashlib
     from app.modules.content.models import ContentAssetFile
 
-    # 1. Best-effort persist file to local disk / /tmp
-    upload_dir = _ensure_upload_dir()
-    file_hash = _hashlib.sha256(file_bytes).hexdigest()
-    # Sanitize filename — keep only alphanumeric, dash, underscore, dot
     safe_name = "".join(c if c.isalnum() or c in (".", "-", "_") else "_" for c in original_filename)
-    stored_filename = f"{file_hash[:12]}_{safe_name}"
-    stored_path = os.path.join(upload_dir, stored_filename)
 
-    try:
-        with open(stored_path, "wb") as fh:
-            fh.write(file_bytes)
-    except Exception as exc:
-        logger.warning("Failed writing PDF to local path %s: %s", stored_path, exc)
+    if file_bytes is not None and len(file_bytes) > 0:
+        # 1. Best-effort persist file to local disk / /tmp
+        upload_dir = _ensure_upload_dir()
+        file_hash = _hashlib.sha256(file_bytes).hexdigest()
+        stored_filename = f"{file_hash[:12]}_{safe_name}"
+        stored_path = os.path.join(upload_dir, stored_filename)
 
-    # 2. Persist to Supabase Storage (globally accessible CDN)
-    public_url = _upload_to_supabase_storage(stored_filename, file_bytes)
-    final_storage_path = public_url if public_url else stored_path
+        try:
+            with open(stored_path, "wb") as fh:
+                fh.write(file_bytes)
+        except Exception as exc:
+            logger.warning("Failed writing PDF to local path %s: %s", stored_path, exc)
+
+        # 2. Persist to Supabase Storage (globally accessible CDN)
+        public_url = _upload_to_supabase_storage(stored_filename, file_bytes)
+        final_storage_path = public_url if public_url else stored_path
+        actual_size = len(file_bytes)
+    elif file_url:
+        final_storage_path = file_url
+        file_hash = _hashlib.sha256(file_url.encode()).hexdigest()
+        stored_filename = safe_name
+        actual_size = file_size or 0
+    else:
+        raise ValueError("Either file_bytes or file_url must be provided for PDF upload.")
 
     # 3. Create Product catalog entry (product_type = 'memo')
     if folder_id is not None:
@@ -1557,19 +1568,22 @@ async def upload_pdf_document(
         content_type="pdf",
         storage_path=final_storage_path,
         content_hash=file_hash,
-        size_bytes=len(file_bytes),
+        size_bytes=actual_size,
         is_encrypted=False,
     )
     db.add(asset)
     await db.flush()
 
-    # 5. Persist bytes directly in PostgreSQL content_asset_files table
-    # This guarantees 100% availability across all Vercel serverless containers
-    asset_file = ContentAssetFile(
-        asset_id=asset.id,
-        file_bytes=file_bytes,
-    )
-    db.add(asset_file)
+    # 5. Persist bytes in PostgreSQL only if small file bytes were passed
+    if file_bytes is not None and len(file_bytes) > 0 and len(file_bytes) < 4 * 1024 * 1024:
+        try:
+            asset_file = ContentAssetFile(
+                asset_id=asset.id,
+                file_bytes=file_bytes,
+            )
+            db.add(asset_file)
+        except Exception as exc:
+            logger.warning("Optional asset_file persist skipped: %s", exc)
 
     # 6. Version record
     version = ProductVersion(
@@ -1611,7 +1625,7 @@ async def upload_pdf_document(
             "title": title,
             "filename": original_filename,
             "stored_path": final_storage_path,
-            "size_bytes": len(file_bytes),
+            "size_bytes": actual_size,
             "medical_year": medical_year,
         },
     )
@@ -1631,7 +1645,7 @@ async def upload_pdf_document(
         "created_at": product.created_at,
         "asset_id": asset.id,
         "stored_filename": stored_filename,
-        "size_bytes": len(file_bytes),
+        "size_bytes": actual_size,
     }
 
 
