@@ -1574,8 +1574,8 @@ async def upload_pdf_document(
     db.add(asset)
     await db.flush()
 
-    # 5. Persist bytes in PostgreSQL only if small file bytes were passed
-    if file_bytes is not None and len(file_bytes) > 0 and len(file_bytes) < 4 * 1024 * 1024:
+    # 5. Persist bytes in PostgreSQL if file bytes <= 10 MB
+    if file_bytes is not None and len(file_bytes) > 0 and len(file_bytes) <= 10 * 1024 * 1024:
         try:
             asset_file = ContentAssetFile(
                 asset_id=asset.id,
