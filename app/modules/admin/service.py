@@ -1547,6 +1547,27 @@ async def upload_pdf_document(
             medical_year = folder.medical_year
 
     price_piastres = egp_to_piastres(price_egp)
+
+    # Auto-generate crisp Page 1 cover thumbnail if not provided by client
+    if not preview_data:
+        try:
+            from app.modules.catalog.service import rasterize_pdf_page_1
+            pdf_for_thumb = file_bytes
+            if not pdf_for_thumb and file_url:
+                import urllib.request
+                req = urllib.request.Request(file_url, headers={"User-Agent": "Mozilla/5.0"})
+                with urllib.request.urlopen(req, timeout=15) as resp:
+                    pdf_for_thumb = resp.read()
+            if pdf_for_thumb:
+                res = rasterize_pdf_page_1(pdf_for_thumb)
+                if res:
+                    thumb_bytes, ct = res
+                    import base64
+                    b64 = base64.b64encode(thumb_bytes).decode("ascii")
+                    preview_data = f"data:{ct};base64,{b64}"
+        except Exception as thumb_err:
+            logger.warning("Auto page 1 thumbnail generation skipped: %s", thumb_err)
+
     product = Product(
         title=title,
         description=description,

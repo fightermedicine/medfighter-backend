@@ -51,56 +51,147 @@ def _sanitize_list_preview_data(product_id: uuid.UUID, preview_data: str | None)
     return f"{edge_domain}/v1/catalog/products/{product_id}/thumbnail?v=20260923_hd2"
 
 
+def rasterize_pdf_page_1(pdf_bytes: bytes) -> tuple[bytes, str] | None:
+    """Render page 1 of PDF as high-quality JPEG bytes using pypdfium2."""
+    try:
+        import io
+        import pypdfium2
+
+        pdf = pypdfium2.PdfDocument(pdf_bytes)
+        if len(pdf) == 0:
+            return None
+        page = pdf[0]
+        img = page.render(scale=1.5).to_pil()
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=85)
+        return buf.getvalue(), "image/jpeg"
+    except Exception as exc:
+        logger.warning("PDF page 1 rasterization failed: %s", exc)
+        return None
+
+
+async def _heal_and_fetch_product_thumbnail(
+    db: AsyncSession, product: Product
+) -> tuple[bytes, str] | None:
+    """Dynamically extract page 1 from the product's ContentAsset PDF and heal preview_data."""
+    from app.modules.content.models import ContentAsset, ContentAssetFile
+
+    asset = await db.scalar(
+        select(ContentAsset)
+        .where(ContentAsset.product_id == product.id)
+        .order_by(ContentAsset.created_at.desc())
+    )
+    if not asset:
+        return None
+
+    pdf_bytes: bytes | None = None
+    asset_file = await db.scalar(
+        select(ContentAssetFile).where(ContentAssetFile.asset_id == asset.id)
+    )
+    if asset_file and asset_file.file_bytes:
+        pdf_bytes = asset_file.file_bytes
+    elif asset.storage_path:
+        import os
+
+        if os.path.exists(asset.storage_path):
+            try:
+                with open(asset.storage_path, "rb") as fh:
+                    pdf_bytes = fh.read()
+            except Exception:
+                pass
+        elif asset.storage_path.startswith("http://") or asset.storage_path.startswith("https://"):
+            try:
+                import httpx
+
+                async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+                    resp = await client.get(asset.storage_path)
+                    if resp.status_code == 200:
+                        pdf_bytes = resp.content
+            except Exception as e:
+                logger.warning("Could not download asset PDF for thumbnail healing: %s", e)
+
+    if not pdf_bytes:
+        return None
+
+    res = rasterize_pdf_page_1(pdf_bytes)
+    if res:
+        thumb_bytes, ct = res
+        b64 = base64.b64encode(thumb_bytes).decode("ascii")
+        product.preview_data = f"data:{ct};base64,{b64}"
+        try:
+            await db.commit()
+        except Exception:
+            pass
+        return thumb_bytes, ct
+    return None
+
+
 async def get_product_thumbnail_bytes(
     db: AsyncSession, product_id: uuid.UUID
 ) -> tuple[bytes, str]:
-    """Extract and cache binary thumbnail bytes from product preview_data."""
+    """Extract and cache binary thumbnail bytes from product preview_data, with automatic self-healing."""
     pid_str = str(product_id)
     if pid_str in _THUMBNAIL_CACHE:
         return _THUMBNAIL_CACHE[pid_str]
 
     product = await db.scalar(select(Product).where(Product.id == product_id))
-    if not product or not product.preview_data:
-        fallback = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82"
+    fallback = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82"
+    if not product:
         return fallback, "image/png"
 
-    raw = product.preview_data.strip()
+    raw = product.preview_data.strip() if product.preview_data else ""
 
-    # Handle direct remote image URLs (e.g. Supabase storage or external CDN)
+    # Detect circular self-referencing thumbnail endpoint URL in DB
     if raw.startswith("http://") or raw.startswith("https://"):
+        if f"/catalog/products/{product_id}/thumbnail" in raw:
+            raw = ""  # Broken self-reference, force heal below
+        else:
+            try:
+                import httpx
+
+                async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                    resp = await client.get(raw)
+                    if resp.status_code == 200:
+                        ct = resp.headers.get("content-type", "image/webp")
+                        data = resp.content
+                        if len(_THUMBNAIL_CACHE) > 100:
+                            _THUMBNAIL_CACHE.clear()
+                        _THUMBNAIL_CACHE[pid_str] = (data, ct)
+                        return data, ct
+            except Exception:
+                raw = ""
+
+    if raw:
+        media_type = "image/png"
+        if raw.startswith("data:image/"):
+            header, _, encoded = raw.partition(",")
+            if "image/jpeg" in header or "image/jpg" in header:
+                media_type = "image/jpeg"
+            elif "image/webp" in header:
+                media_type = "image/webp"
+        else:
+            encoded = raw
+
         try:
-            import httpx
-            async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
-                resp = await client.get(raw)
-                if resp.status_code == 200:
-                    ct = resp.headers.get("content-type", "image/webp")
-                    data = resp.content
-                    if len(_THUMBNAIL_CACHE) > 100:
-                        _THUMBNAIL_CACHE.clear()
-                    _THUMBNAIL_CACHE[pid_str] = (data, ct)
-                    return data, ct
+            data = base64.b64decode(encoded)
+            if len(data) > 100:  # Valid decoded image, not 86-byte dummy
+                if len(_THUMBNAIL_CACHE) > 100:
+                    _THUMBNAIL_CACHE.clear()
+                _THUMBNAIL_CACHE[pid_str] = (data, media_type)
+                return data, media_type
         except Exception:
             pass
 
-    media_type = "image/png"
-    if raw.startswith("data:image/"):
-        header, _, encoded = raw.partition(",")
-        if "image/jpeg" in header or "image/jpg" in header:
-            media_type = "image/jpeg"
-        elif "image/webp" in header:
-            media_type = "image/webp"
-    else:
-        encoded = raw
-
-    try:
-        data = base64.b64decode(encoded)
+    # Self-healing: Extract page 1 directly from the booklet's PDF
+    healed = await _heal_and_fetch_product_thumbnail(db, product)
+    if healed:
+        data, media_type = healed
         if len(_THUMBNAIL_CACHE) > 100:
             _THUMBNAIL_CACHE.clear()
         _THUMBNAIL_CACHE[pid_str] = (data, media_type)
         return data, media_type
-    except Exception:
-        fallback = b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15c4\x00\x00\x00\nIDATx\x9cc`\x00\x00\x00\x02\x00\x01H\xaf\xa4q\x00\x00\x00\x00IEND\xaeB`\x82"
-        return fallback, "image/png"
+
+    return fallback, "image/png"
 
 
 def _to_product_response(
