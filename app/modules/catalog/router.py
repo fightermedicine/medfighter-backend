@@ -27,9 +27,9 @@ async def get_products(
 ) -> list[ProductResponse]:
     """Public catalog endpoint to list active products optionally filtered by medical year & folder."""
     response.headers["Cache-Control"] = "public, max-age=60, stale-while-revalidate=300"
-    if current_user:
-        is_admin = any(ur.role_id in ("ADMIN", "SUPER_ADMIN") for ur in current_user.roles)
-        if not is_admin:
+    if current_user and medical_year is None:
+        user_roles = {ur.role_id for ur in getattr(current_user, "roles", [])}
+        if not user_roles.intersection({"ADMIN", "SUPER_ADMIN", "CREATOR"}):
             medical_year = current_user.medical_year
     return await list_products(
         db, medical_year=medical_year, folder_id=folder_id, root_only=root_only

@@ -39,7 +39,7 @@ def _sanitize_list_preview_data(product_id: uuid.UUID, preview_data: str | None)
     if not preview_data:
         return None
     cleaned = preview_data.strip()
-    edge_domain = get_settings().cloudflare_edge_domain or "https://fighters-edge-gateway.fightermedicine.workers.dev"
+    edge_domain = get_settings().cloudflare_edge_domain or "https://medfighter-backend.vercel.app"
     edge_domain = edge_domain.rstrip("/")
 
     # If it is already a thumbnail URL for this product, standardize on the fresh cache buster
@@ -213,7 +213,7 @@ def _to_product_response(
         )
     if is_list:
         if has_preview:
-            edge_domain = (get_settings().cloudflare_edge_domain or "https://fighters-edge-gateway.fightermedicine.workers.dev").rstrip("/")
+            edge_domain = (get_settings().cloudflare_edge_domain or "https://medfighter-backend.vercel.app").rstrip("/")
             preview = f"{edge_domain}/v1/catalog/products/{p.id}/thumbnail?v=20260923_hd2"
         else:
             preview = None

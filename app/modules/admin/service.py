@@ -950,7 +950,7 @@ def _sanitize_list_preview_data(product_id: uuid.UUID | None, preview_data: str 
     if data_str.startswith("http://") or data_str.startswith("https://"):
         return data_str
     if product_id:
-        edge_domain = get_settings().cloudflare_edge_domain or "https://fighters-edge-gateway.fightermedicine.workers.dev"
+        edge_domain = get_settings().cloudflare_edge_domain or "https://medfighter-backend.vercel.app"
         edge_domain = edge_domain.rstrip("/")
         return f"{edge_domain}/v1/catalog/products/{product_id}/thumbnail?v=20260923_hd"
     if data_str.startswith("data:image/") or len(data_str) > 512:
