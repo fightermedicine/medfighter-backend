@@ -450,7 +450,7 @@ async def admin_delete_course_curriculum_item(
 )
 async def admin_create_quiz(
     payload: AdminQuizCreateRequest,
-    admin: RequireAdmin,
+    admin: RequireCreator,
     db: AsyncSession = Depends(get_db),
 ) -> AdminQuizOut:
     quiz = await create_mcq_quiz(
@@ -477,7 +477,7 @@ async def admin_create_quiz(
     summary="List all authored MCQ quizzes (Creator/Admin only)",
 )
 async def admin_list_quizzes(
-    admin: RequireAdmin,
+    admin: RequireCreator,
     db: AsyncSession = Depends(get_db),
 ) -> list[AdminQuizOut]:
     quizzes = await list_admin_quizzes(db)
